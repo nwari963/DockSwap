@@ -7,7 +7,7 @@ A **BuildPlaybook** (`BUILD-PLAYBOOK.md`): the complete, decision-complete spec 
 ## Notes
 
 - **Domain**: macOS Dock management via `com.apple.dock.plist` manipulation
-- **Backend**: `dockutil` (Swift CLI, 2K★, MIT) — shell out initially, consider embedding later
+- **Backend**: `dockutil` (Swift CLI, 2K★, Apache-2.0) — shell out; never embed or link
 - **Language**: Swift (native, single binary, macOS ecosystem)
 - **Storage**: JSON files at `~/.dockswap/presets/<name>.json`
 - **CLI name**: `dockswap`
