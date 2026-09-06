@@ -21,6 +21,7 @@ Decisions:
   - Reverse-video highlight, cursor hide/show
   - q/Esc to cancel
 - **Navigation**: arrows + Enter; number keys as shortcut for first 9 presets.
+- **Exit codes**: q/Esc cancel → 0 (no apply); Enter-apply → the chosen switch's exit code (success or failure propagates).
 - **Preview**: list preset names with item counts; second Enter on preset shows item list before apply (or `--preview` flag). Default: single Enter applies, `--dry-run` prints diff.
 - **Confirmation**: auto-apply on Enter. `dockswap switch` non-interactive path is the safe default; TUI is the power path.
 - **Entry point**: bare `dockswap` (no args) opens the picker.

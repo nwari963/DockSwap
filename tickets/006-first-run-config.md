@@ -24,7 +24,7 @@ Decisions:
 - One idempotent helper `ensureWorkspace()` runs once at startup: `FileManager.createDirectory(at: …, withIntermediateDirectories: true)` for `~/.dockswap/presets` when missing. `list`/`delete` on a fresh machine just work — no setup bar, no error to explain, and nothing is created on machines that already have (or never need) the dir.
 
 **dockutil detection is lazy and command-scoped.**
-- Resolve dockutil **only inside commands that shell out — `save` and `switch`** (`list`/`delete` never touch it, so they run identically on a dockutil-less machine). Resolution order per 002: PATH → `$DOCKSWAP_DOCKUTIL_PATH`.
+- Resolve dockutil **only inside commands that shell out — `save` and `switch`** (`list`/`delete` never touch it, so they run identically on a dockutil-less machine). Resolution order per 002: `$DOCKSWAP_DOCKUTIL_PATH` (env wins) → PATH.
 - Detection is one `dockutil --version` call, cached for process lifetime; reuse 002's version gate (>= 3.0, 3.1.3 practical minimum).
 - Missing/too-old: print the actionable one-liner from 002 (`dockutil not found — install with \`brew install dockutil\``) and exit 3. **No install prompt.** Prompting-and-auto-running `brew install` is a heavyweight side effect (network, Xcode CLT requirements) for a CLI whose job is dock switching; a message + exit code is the smallest actionable path and stays scriptable in both directions.
 

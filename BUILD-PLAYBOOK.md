@@ -19,17 +19,17 @@
 
 ## 1. Preset schema (ticket 001)
 
-`preset-v1`, JSON Schema draft-07. Top level: `name`, `schemaVersion: 1`, `createdAt`/`updatedAt` (ISO-8601), `dockutilVersion`, `macOSVersion`, and two ordered arrays: `apps` (left of divider) and `others` (right of divider). Identity: `bundleId` primary, `path` fallback (anyOf). Item types: `app`, `folder` (path+view+display+sort), `url` (title+url), `spacer`. Strict writer (`additionalProperties: false`), lenient reader (unknown fields preserved on rewrite). Full schema + example: [tickets/001-preset-schema-design.md](tickets/001-preset-schema-design.md).
+`preset-v1`, JSON Schema draft-07. Top level: `name`, `schemaVersion: 1`, `createdAt`/`updatedAt` (ISO-8601), `dockutilVersion`, `macOSVersion`, and two ordered arrays: `apps` (left of divider) and `others` (right of divider). Identity: `bundleId` primary, `path` fallback (anyOf). Item types: `app`, `folder` (path required; view/display/sort **optional** — capture can't see them), `url` (title+url), `spacer`. Capture rule: `--list` rows with empty label+url+bundleId → `spacer` (positional, never identity-matched). Strict writer, lenient reader. On re-`save`, keep original `createdAt`, bump `updatedAt`. Record a real `--list` capture fixture before freezing the parser (build step 0: install dockutil via brew). Full schema + example: [tickets/001-preset-schema-design.md](tickets/001-preset-schema-design.md).
 
 Known capture limit (from 002): `dockutil --list` doesn't expose spacer sub-type or stack view options; post-MVP fallback is `CFPreferencesCopyAppValue`.
 
 ## 2. dockutil integration (ticket 002)
 
-Shell out via `Process` as the invoking user (never sudo). Resolve binary: PATH → `$DOCKSWAP_DOCKUTIL_PATH` → fail with `brew install dockutil` hint (exit 3). Version gate on `--version`. One batched invocation per switch (adds+removes together) so dockutil restarts the Dock exactly once; never `--no-restart` in normal operation. Capture via `dockutil --list` (tab-separated: label, url, section, plist, bundle-id). Nonzero exit → echo stderr verbatim, abort, non-zero exit. Full detail: [tickets/002-dockutil-integration.md](tickets/002-dockutil-integration.md).
+Shell out via `Process` as the invoking user (never sudo). Resolve binary: **`$DOCKSWAP_DOCKUTIL_PATH` first**, then PATH → fail with `brew install dockutil` hint (exit 3). Version gate on `--version` (parse first semver-ish token; accept bare `3.1.3` or `dockutil 3.1.3`). One batched invocation per switch (adds+removes together) so dockutil restarts the Dock exactly once; never `--no-restart` in normal operation. Capture via `dockutil --list` (tab-separated: label, url, section, plist, bundle-id). Nonzero exit → echo stderr verbatim, abort, non-zero exit. Full detail: [tickets/002-dockutil-integration.md](tickets/002-dockutil-integration.md).
 
 ## 3. Switch semantics (ticket 003)
 
-Preset = exhaustive replacement of the pinned Dock (`persistent-apps` + `persistent-others`), applied as a diff: explicit-identity removals + order-anchored additions (`--position after <preceding preset item>`, first falls back to `--position beginning`). Never `--remove all`. Short-circuit when already applied (exit 0, no restart). Never closes/launches apps (post-MVP opt-in flags only). Missing-on-disk items: skip + stderr warning, exit 0. Preserves recent-apps, minimized windows, dock-extras. Abort leaves Dock untouched. Idempotent. Full detail: [tickets/003-switch-semantics.md](tickets/003-switch-semantics.md).
+Preset = exhaustive replacement of the pinned Dock (`persistent-apps` + `persistent-others`), applied as a diff. **Identity matching** (core rule): bundleId-vs-bundleId when both present; else canonicalized path compare (expand `~`, strip `file://`, trailing `/`, resolve symlinks, `/System/Applications` ↔ `/Applications`); URL exact match; **label never a match key** (anchor only); rows with empty label+url+bundleId are spacers — never removal/match candidates. Removals: explicit-identity only, rows with resolvable identity absent from the preset; never `--remove all`. Additions: preset order, each anchored `--position after <preceding preset item, pre-existing or added earlier in the same batch>`, first in section falls back to `--position beginning`, each with `--section apps|others`; all `--remove` args precede all `--add` args. Short-circuit when already applied (exit 0, no restart). Never closes/launches apps. Missing-on-disk items: skip + stderr warning, exit 0. Preserves recent-apps, minimized windows; unidentifiable rows never removed. Abort leaves Dock untouched. Idempotent. Full detail: [tickets/003-switch-semantics.md](tickets/003-switch-semantics.md).
 
 ## 4. CLI surface (ticket 004)
 
@@ -46,7 +46,7 @@ Preset names: `^[A-Za-z0-9][A-Za-z0-9._-]*$`. `--json` on `list` only (stable sc
 
 ## 5. TUI picker (ticket 005)
 
-Dependency-free ANSI raw-mode picker (~80–140 lines): termios raw mode, arrows+Enter, number shortcuts 1–9, q/Esc cancel, reverse-video highlight, cursor hide/show. Bare `dockswap` opens it; Enter applies (auto-apply); preview = second-Enter item list or `switch --dry-run`. Research verdict: no mature Swift TUI lib exists (TauTUI is young, Swift 6-only) — dependency-free is the right call. Full detail + NSStatusItem post-MVP sketch: [tickets/005-tui-design.md](tickets/005-tui-design.md), [research/swift-tui-options.md](research/swift-tui-options.md).
+Dependency-free ANSI raw-mode picker (~80–140 lines): termios raw mode, arrows+Enter, number shortcuts 1–9, q/Esc cancel → exit 0, reverse-video highlight, cursor hide/show. Bare `dockswap` opens it; Enter applies (auto-apply) and propagates the chosen switch's exit code; preview = second-Enter item list or `switch --dry-run`. Research verdict: no mature Swift TUI lib exists (TauTUI is young, Swift 6-only) — dependency-free is the right call. Full detail + NSStatusItem post-MVP sketch: [tickets/005-tui-design.md](tickets/005-tui-design.md), [research/swift-tui-options.md](research/swift-tui-options.md).
 
 ## 6. First-run & config (ticket 006)
 
@@ -64,10 +64,11 @@ Lazy idempotent `ensureWorkspace()` creates `~/.dockswap/presets/` (withIntermed
 
 ## Build order (for the build session)
 
+0. Install dockutil: `brew install dockutil` (gives build step 1 a `--list` capture fixture).
 1. `swift package init` — Package.swift with both targets, pin swift-argument-parser `from: "1.3.0"`, `.macOS(.v13)`.
 2. `DockSwapCore`: preset Codable model (001) + roundtrip tests w/ fixtures.
 3. dockutil wrapper (002) with `DockUtilExecuting` protocol + fake; `--list` tab-parse tests.
-4. Diff engine (003) + edge tests.
+4. Diff engine (003) + edge tests, including identity-matching rules.
 5. Executable: four verbs + bare-picker entry (004); exit-code contract incl. `parseAsRoot`/exit-1 behavior.
 6. ANSI picker (005).
 7. `ensureWorkspace()` + lazy dockutil resolution (006).

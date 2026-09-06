@@ -29,7 +29,7 @@ dockswap --generate-completion-script <bash|zsh|fish>   # print completion scrip
 - **No `--no-restart` in MVP.** Diff-apply already batches all add/remove into one dockutil invocation with exactly one Dock restart (003). Exposing the flag creates a half-applied Dock (plist written, Dock not restarted) for zero user benefit. Reserved for post-MVP.
 - **No `--preview` flag in MVP.** CLI preview of an apply is `switch --dry-run` (prints the planned removal/add lists, 003). Interactive preview is the TUI's second-Enter (005). A `show`/`preview` verb is post-MVP.
 - **`--json` lives on `list` only.** It is the single machine-readable interface, pinned to a stable schema. `switch`/`save`/`delete` emit no parseable payload, so they never accept `--json` (delete over add). `--quiet` (global) silences informational stdout everywhere; errors still go to stderr with a nonzero exit.
-- **`save` overwrites silently.** A preset is "my Dock right now"; re-running `save <same-name>` is the update path. Content is small and re-capturable, so clobber is cheap; a `--force` wall would punish the common case. Recovery from a typo'd name is one `delete` or re-capture away.
+- **`save` overwrites silently.** A preset is "my Dock right now"; re-running `save <same-name>` is the update path. Content is small and re-capturable, so clobber is cheap; a `--force` wall would punish the common case. Recovery from a typo'd name is one `delete` or re-capture away. On overwrite, preserve the original `createdAt` and bump `updatedAt` (001).
 - **Preset names**: must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` — a valid filename token (no `/`, no leading `.`), so no path traversal and no hidden files. A name outside this is a usage error (1).
 - **Check order for `switch`**: validate name → preset exists? (else 2) → dockutil available? (else 3) → run diff/apply. `--dry-run` still requires dockutil (it needs `dockutil --list` for the diff).
 - **First run**: `~/.dockswap/presets/` auto-created on first `save` (006); IO failure here is exit 6.
@@ -52,7 +52,7 @@ dockswap --generate-completion-script <bash|zsh|fish>   # print completion scrip
 | 5 | dockutil run failed — nonzero exit; dockutil's own stderr echoed verbatim (002) |
 | 6 | filesystem / config I/O failure — cannot create `~/.dockswap/`, cannot write preset |
 
-Note on 1: swift-argument-parser's default exit for parse/validation failures is `EX_USAGE` (64). To honor the contract, `main` uses the lower-level `parseAsRoot` inside `do/catch` and re-exits with 1; a build that shortcuts with the `.main()` convenience would return 64. The contract's number is **1**, asserted in CI.
+Note on 1: swift-argument-parser's default exit for parse/validation failures is `EX_USAGE` (64). To honor the contract, `main` uses the lower-level `parseAsRoot` inside `do/catch` and re-exits with 1; a build that shortcuts with the `.main()` convenience would return 64. The contract's number is **1**, asserted in CI. The CI assertion uses spawn-based usage-error tests (unknown subcommand, invalid preset name, missing preset file) — these touch no dock and no dockutil, so they are CI-safe despite the "no integration on CI" rule (007).
 
 **Help + shell completion**: swift-argument-parser free features — `--help` with one-line per-command `abstract`, `--version`, and built-in `--generate-completion-script <bash|zsh|fish>`. No custom help text beyond the abstracts.
 

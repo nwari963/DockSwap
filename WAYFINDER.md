@@ -16,21 +16,15 @@ A **BuildPlaybook** (`BUILD-PLAYBOOK.md`): the complete, decision-complete spec 
 
 ## Decisions so far
 
-- [Interface shape](tickets/005-tui-design.md): CLI/TUI + optional menu bar; Swift; JSON presets; MVP = save/switch/list/delete
-- [Naming](tickets/005-tui-design.md): CLI `dockswap`, repo `dockswap`
-- [TUI Design](tickets/005-tui-design.md): no TUI library; swift-argument-parser (only dep) + dependency-free ANSI raw-mode picker (~80-140 lines); bare `dockswap` opens picker; auto-apply on Enter
-- [Switch Semantics](tickets/003-switch-semantics.md): preset = exhaustive replacement of pinned Dock; diff-based apply (explicit removes + order-anchored adds, one dockutil call = one restart); never closes/launches apps; missing apps skipped with warning; recent-apps/minimized-windows preserved
-- [dockutil integration](tickets/002-dockutil-integration.md): shell out to dockutil binary (never embed, never write plist directly); require >= 3.0 (min 3.1.3); one batched invocation per switch, no `--no-restart`; run as invoking user; capture via `dockutil --list` tab-parse
-- [CLI command structure](tickets/004-cli-command-structure.md): exactly four verbs — `save <name>`, `switch <name>` (`--dry-run`), `list` (`--json`, the only machine interface), `delete <name>` — plus bare `dockswap` picker entry; no `--no-restart`/`--preview` in MVP; exit codes 0–6 (1 usage, 2 preset-not-found, 3 dockutil-missing, 4 invalid-preset, 5 dockutil-failed, 6 io); shell completion via library `--generate-completion-script`
-- [Build, test & distribution](tickets/007-build-test-distribution.md): SwiftPM package split into `DockSwapCore` library + `dockswap` executable; `.macOS(.v13)` min; swift-argument-parser only dep; unit tests on CI (macOS GitHub Actions runner), opt-in integration tests never on CI; MIT license; GitHub Releases (sign+notarize when cert available) + in-repo `Formula/dockswap.rb` tap, graduate to homebrew-core post-MVP
+- [Preset schema design](tickets/001-preset-schema-design.md): `preset-v1`, bundleId-primary/path-fallback identity, apps/others arrays, optional folder options, spacer capture rule, timestamps, schemaVersion migration
+- [CLI command structure](tickets/004-cli-command-structure.md): four verbs + bare picker, flags, exit codes 0-6, help/completion via library, save overwrite semantics
+- [First-run experience & config](tickets/006-first-run-config.md): lazy init, no config file, dockutil detected lazily in save/switch only, env var `DOCKSWAP_DOCKUTIL_PATH` wins over PATH
+- [Build, test & distribution](tickets/007-build-test-distribution.md): DockSwapCore lib + executable, swift-argument-parser only dep, macOS 13+, unit tests on CI, opt-in integration off CI, MIT, GH Releases + in-repo tap
 
 ## Not yet specified
 
-- **Preset schema design**: Exact JSON structure for a dock preset (app paths, bundle IDs, folder/stack/URL items, spacers, positions, sections)
-- **Menu bar app**: Separate target or same binary with flag? Status item + popover; preset list with switch action
-- **First-run experience**: Detect dockutil; guide install via Homebrew; create config dir; permissions (Accessibility for hotkeys later)
-- **Config file**: `~/.dockswap/config.json` — dockutil path, preset dir, default behaviors
-- **Post-MVP features**: Global hotkeys (Accessibility), Focus mode integration (Shortcuts), Lock Dock, preset import/export, multi-monitor awareness
+- **Menu bar app**: NSStatusItem companion, post-MVP only — pure AppKit, no deps; not in MVP.
+- **Post-MVP features**: Global hotkeys (Accessibility), Focus mode integration (Shortcuts), Lock Dock, preset import/export, multi-monitor awareness, embedding dockutil, homebrew-core bottles, `--no-restart`/`--preview` flags, config file, close/launch app opt-ins, `CFPreferencesCopyAppValue` capture fidelity.
 
 ## Out of scope
 

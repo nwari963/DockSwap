@@ -21,6 +21,7 @@ Fields to pin:
   - `others` → items right of the divider (mounted volumes, downloads, trash, etc.).
   Sparse indices invite drift and merge conflicts; a plain array is the shortest correct representation and maps 1:1 to dockutil's ordered `--add`/`--remove` calls.
 - **Item types**: discriminated by `type`. Each item is the union of a few fixed shapes (see schema). `spacer` has no identity fields.
+- **Folder options are optional**: `view`/`display`/`sort` are omitted when unknown (capture from `--list` cannot see them — ticket 002 fidelity limit); dockutil applies its defaults on add. Writer emits them only when known (hand-authored or future CFPreferences capture).
 - **Metadata**: preset `name` (file-name/label), `createdAt`/`updatedAt` (ISO-8601), `schemaVersion` (integer, current = `1`), `dockutilVersion` + `macOSVersion` snapshot. No settable `position`.
 - **Compatibility**: forward migration is driven by `schemaVersion`. On mismatch, the tool refuses or upgrades in place; unknown fields are ignored and preserved on rewrite (never silently dropped) so future writes from an older client can't destroy data. `bundleId`/`path` both present gives lenient downgrade — an older reader can still apply via `path` if it ignores `bundleId`.
 
@@ -70,7 +71,7 @@ Fields to pin:
     "folder": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "path", "view", "display", "sort"],
+      "required": ["type", "path"],
       "properties": {
         "type":    { "const": "folder" },
         "path":    { "type": "string" },
@@ -139,6 +140,7 @@ Fields to pin:
 ### Notes
 
 - `spacer` inside `apps` left of the divider, and `apps`/`others` are both allowed to be empty (`[]`) — an empty side means "no items here".
+- **Capture rule**: `--list` rows with empty label AND empty url AND empty bundleId are captured as `{ "type": "spacer" }`; spacers are positional, not identity-matched (003). A capture fixture from a real `dockutil --list` run must be recorded before the parser is frozen.
 - Missing running-dock edge cases (trash, recent apps, minimized dock) are *not* captured; they're preserved automatically by dockutil during switch and are handled in [002-dockutil-integration.md](002-dockutil-integration.md) / [003-switch-semantics.md](003-switch-semantics.md).
 - Migration: bumping `schemaVersion` and adding required fields is a breaking change (requires a v1→v2 migrator); additive optional fields keep `schemaVersion` unchanged.
 - Strictness split: the schema (with `additionalProperties: false`) is the contract for files **dockswap writes and validates as v1**; the *reader* is lenient — it ignores and preserves unknown fields on rewrite within the same `schemaVersion`, so a future `schemaVersion` bump or a hand-edited file never gets silently truncated.
