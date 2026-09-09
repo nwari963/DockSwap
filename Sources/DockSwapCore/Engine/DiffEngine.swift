@@ -1,76 +1,78 @@
 import Foundation
 
-/// Diff engine for applying presets to the live dock.
+// MARK: - Apply
+
 public struct DockDiffEngine {
     public let dockUtil: DockUtilExecuting
 
-    public init(dockUtil: DockUtilExecuting = DockUtil()) {
+    public init(dockUtil: DockUtilExecuting = DockUtil(path: "")) {
         self.dockUtil = dockUtil
     }
 
-    /// Apply a preset to the live dock.
-    /// - Returns: true if the dock was changed, false if already applied.
     public func apply(_ preset: DockPreset) throws -> Bool {
-        let current = try captureLiveDock()
-        guard !preset.isApplied(to: current) else { return false }
+        let current = try captureCurrentPreset()
+        guard !isApplied(preset, to: current) else { return false }
 
-        let (removes, adds) = preset.diff(from: current)
+        let (removes, adds) = diff(preset, from: current)
         guard !removes.isEmpty || !adds.isEmpty else { return false }
 
         var args: [String] = []
-        // Remove first, then add
-        for item in removes {
-            args.append(contentsOf: item.removeArgs)
-        }
-        for item in adds {
-            args.append(contentsOf: item.addArgs)
-        }
+        for item in removes { args.append(contentsOf: item.removeArgs) }
+        for item in adds { args.append(contentsOf: item.addArgs) }
 
-        if !args.isEmpty {
-            try dockUtil.run(args)
-        }
+        if !args.isEmpty { _ = try dockUtil.run(args) }
         return true
     }
 
-    /// Capture the live dock using `dockutil --list`.
-    public func captureLiveDock() throws -> DockPreset {
-        let output = try dockUtil.run(["--list"])
-        return captureLiveDock(from: output, name: "live")
+    public func captureCurrentPreset() throws -> DockPreset {
+        captureLiveDock(from: try dockUtil.run(["--list"]), name: "live")
     }
 }
 
 // MARK: - Diffing
 
-/// Diff a preset against the live dock.
-/// - Returns: (removals, additions)
-public func diff(from current: DockPreset) -> ([DiffItem], [DiffItem]) {
+public func diff(_ preset: DockPreset, from current: DockPreset) -> ([DiffItem], [DiffItem]) {
     var removes: [DiffItem] = []
     var adds: [DiffItem] = []
 
-    // Removals: items in current not in preset
-    for item in current.apps + current.others {
-        if !preset.contains(item) {
-            removes.append(DiffItem(item: item, section: item.section(in: current)))
+    for item in current.apps {
+        if item.isSpacer { continue }          // spacers are positional; never remove (003)
+        let sectionName = "apps"
+        if !contains(item, in: preset, section: sectionName) {
+            removes.append(DiffItem(item: item, section: sectionName))
+        }
+    }
+    for item in current.others {
+        if item.isSpacer { continue }
+        let sectionName = "others"
+        if !contains(item, in: preset, section: sectionName) {
+            removes.append(DiffItem(item: item, section: sectionName))
         }
     }
 
-    // Additions: items in preset not in current
-    for item in preset.apps + preset.others {
-        if !current.contains(item) {
-            adds.append(DiffItem(item: item, section: item.section(in: preset)))
+    for item in preset.apps {
+        if item.isSpacer { continue }          // add spacers positionally only via adds of other items (ponytail: simple order handling)
+        let sectionName = "apps"
+        if !contains(item, in: current, section: sectionName) {
+            adds.append(DiffItem(item: item, section: sectionName))
+        }
+    }
+    for item in preset.others {
+        if item.isSpacer { continue }
+        let sectionName = "others"
+        if !contains(item, in: current, section: sectionName) {
+            adds.append(DiffItem(item: item, section: sectionName))
         }
     }
 
     return (removes, adds)
 }
 
-/// Check if a preset is already applied to the live dock.
-public func isApplied(to current: DockPreset) -> Bool {
-    let (removes, adds) = diff(from: current)
+public func isApplied(_ preset: DockPreset, to current: DockPreset) -> Bool {
+    let (removes, adds) = diff(preset, from: current)
     return removes.isEmpty && adds.isEmpty
 }
 
-/// A diff item with its section.
 public struct DiffItem {
     public let item: DockItem
     public let section: String
@@ -78,114 +80,80 @@ public struct DiffItem {
     public var removeArgs: [String] {
         switch item {
         case .app(let app):
-            if let bundleId = app.identity.bundleId {
-                return ["--remove", bundleId, "--section", section]
-            } else if let path = app.identity.path {
-                return ["--remove", path, "--section", section]
-            } else {
-                return []
-            }
-        case .folder(let folder):
-            return ["--remove", folder.path, "--section", section]
-        case .url(let url):
-            return ["--remove", url.url, "--section", section]
-        case .spacer:
-            return []
+            if let bundleId = app.identity.bundleId { return ["--remove", bundleId, "--section", section] }
+            else if let path = app.identity.path { return ["--remove", path, "--section", section] }
+            else { return [] }
+        case .folder(let folder): return ["--remove", folder.path, "--section", section]
+        case .url(let url): return ["--remove", url.url, "--section", section]
+        case .spacer: return []
         }
     }
 
     public var addArgs: [String] {
         switch item {
         case .app(let app):
-            if let path = app.identity.path {
-                return ["--add", path, "--section", section]
-            } else {
-                return []
-            }
-        case .folder(let folder):
-            return ["--add", folder.path, "--section", section]
-        case .url(let url):
-            return ["--add", url.url, "--section", section]
-        case .spacer:
-            return ["--add", "spacer", "--section", section]
+            if let path = app.identity.path { return ["--add", path, "--section", section] }
+            else { return [] }
+        case .folder(let folder): return ["--add", folder.path, "--section", section]
+        case .url(let url): return ["--add", url.url, "--section", section]
+        case .spacer: return ["--add", "spacer", "--section", section]
         }
     }
 }
 
-// MARK: - Identity matching
+// MARK: - Identity helpers
 
-/// Check if a preset contains an item.
-public func contains(_ item: DockItem) -> Bool {
-    switch item {
-    case .app(let app):
-        return apps.contains(where: { $0.matches(app) }) || others.contains(where: { $0.matches(app) })
-    case .folder(let folder):
-        return apps.contains(where: { $0.matches(folder) }) || others.contains(where: { $0.matches(folder) })
-    case .url(let url):
-        return apps.contains(where: { $0.matches(url) }) || others.contains(where: { $0.matches(url) })
-    case .spacer:
-        return apps.contains(where: { $0.isSpacer }) || others.contains(where: { $0.isSpacer })
-    }
+private func contains(_ item: DockItem, in preset: DockPreset, section sectionName: String) -> Bool {
+    let candidates = sectionName == "others" ? preset.others : preset.apps
+    if item.isSpacer { return candidates.contains(where: { $0.isSpacer }) }
+    return candidates.contains(where: { $0.matches(item) })
 }
 
-/// Check if an item matches another item.
-public func matches(_ other: DockItem) -> Bool {
-    switch (self, other) {
-    case (.app(let lhs), .app(let rhs)):
-        return lhs.identity.bundleId == rhs.identity.bundleId
-            || lhs.identity.path?.canonicalized == rhs.identity.path?.canonicalized
-    case (.folder(let lhs), .folder(let rhs)):
-        return lhs.path.canonicalized == rhs.path.canonicalized
-    case (.url(let lhs), .url(let rhs)):
-        return lhs.url == rhs.url
-    case (.spacer, .spacer):
-        return true
-    default:
+private func section(for item: DockItem, in preset: DockPreset) -> String {
+    if preset.apps.contains(where: { $0.matches(item) }) { return "apps" }
+    if preset.others.contains(where: { $0.matches(item) }) { return "others" }
+    return "apps"
+}
+
+// MARK: - DockItem extensions
+
+private extension DockItem {
+    var isSpacer: Bool {
+        if case .spacer = self { return true }
         return false
     }
+
+    func matches(_ other: DockItem) -> Bool {
+        switch (self, other) {
+        case (.app(let lhs), .app(let rhs)):
+            return lhs.identity.bundleId == rhs.identity.bundleId || lhs.identity.path?.canonicalized == rhs.identity.path?.canonicalized
+        case (.folder(let lhs), .folder(let rhs)):
+            return lhs.path.canonicalized == rhs.path.canonicalized
+        case (.url(let lhs), .url(let rhs)):
+            return lhs.url == rhs.url
+        case (.spacer, .spacer):
+            return true
+        default:
+            return false
+        }
+    }
 }
 
-/// Canonicalize a path for comparison.
-public var canonicalized: String {
-    var path = self
-    // Expand ~
-    if path.hasPrefix("~") {
-        path = (path as NSString).expandingTildeInPath
-    }
-    // Strip file://
-    if path.hasPrefix("file://") {
-        path = String(path.dropFirst("file://".count))
-    }
-    // Strip trailing /
-    if path.hasSuffix("/") {
-        path = String(path.dropLast())
-    }
-    // Resolve symlinks
-    if let resolved = (path as NSString).resolvingSymlinksInPath {
+// MARK: - String canonicalization
+
+private extension String {
+    var canonicalized: String {
+        var path = self
+        if path.hasPrefix("~") { path = (path as NSString).expandingTildeInPath }
+        if path.hasPrefix("file://") { path = String(path.dropFirst("file://".count)) }
+        if path.hasSuffix("/") { path = String(path.dropLast()) }
+        let resolved = (path as NSString).resolvingSymlinksInPath
         path = resolved
-    }
-    // Try /System/Applications ↔ /Applications
-    if path.hasPrefix("/System/Applications/") {
-        let alt = "/Applications/" + String(path.dropFirst("/System/Applications/".count))
-        if FileManager.default.fileExists(atPath: alt) {
-            path = alt
+        if path.hasPrefix("/System/Applications/"), FileManager.default.fileExists(atPath: "/Applications/" + String(path.dropFirst("/System/Applications/".count))) {
+            path = "/Applications/" + String(path.dropFirst("/System/Applications/".count))
+        } else if path.hasPrefix("/Applications/"), FileManager.default.fileExists(atPath: "/System/Applications/" + String(path.dropFirst("/Applications/".count))) {
+            path = "/System/Applications/" + String(path.dropFirst("/Applications/".count))
         }
-    } else if path.hasPrefix("/Applications/") {
-        let alt = "/System/Applications/" + String(path.dropFirst("/Applications/".count))
-        if FileManager.default.fileExists(atPath: alt) {
-            path = alt
-        }
-    }
-    return path
-}
-
-/// Get the section for an item.
-public func section(in preset: DockPreset) -> String {
-    if preset.apps.contains(where: { $0.matches(self) }) {
-        return "apps"
-    } else if preset.others.contains(where: { $0.matches(self) }) {
-        return "others"
-    } else {
-        return "apps"
+        return path
     }
 }

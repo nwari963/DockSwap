@@ -14,7 +14,7 @@ public struct ANSIPicker {
         var raw = termios()
         tcgetattr(STDIN_FILENO, &raw)
         var rawCopy = raw
-        rawCopy.c_lflag &= ~(UInt(ICANON) | ECHO)
+        rawCopy.c_lflag &= ~(tcflag_t(ICANON) | tcflag_t(ECHO))
         tcsetattr(STDIN_FILENO, TCSANOW, &rawCopy)
         defer {
             tcsetattr(STDIN_FILENO, TCSANOW, &raw)

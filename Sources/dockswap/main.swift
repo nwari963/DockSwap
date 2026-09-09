@@ -1,5 +1,6 @@
 import Foundation
 import ArgumentParser
+import DockSwapCore
 
 /// The `dockswap` CLI.
 @main
@@ -21,8 +22,8 @@ struct Save: ParsableCommand {
     var name: String
 
     mutating func run() throws {
-        let engine = DockDiffEngine()
-        let preset = try engine.captureLiveDock()
+        let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
+        let preset = try engine.captureCurrentPreset()
         try preset.save(to: name)
         print("Saved preset \"\"\(name)\"\"")
     }
@@ -38,16 +39,16 @@ struct Switch: ParsableCommand {
     var name: String
 
     @Flag(name: .shortAndLong, help: "Show what would be changed without applying")
-    var dryRun: Bool
+    var dryRun = false
 
     @Flag(name: .shortAndLong, help: "Suppress informational output")
-    var quiet: Bool
+    var quiet = false
 
     mutating func run() throws {
         let preset = try DockPreset.load(named: name)
-        let engine = DockDiffEngine()
+        let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
         if dryRun {
-            let (removes, adds) = preset.diff(from: try engine.captureLiveDock())
+            let (removes, adds) = diff(preset, from: try engine.captureCurrentPreset())
             print("Would remove: \(removes.map { $0.item.description }.joined(separator: ", "))")
             print("Would add: \(adds.map { $0.item.description }.joined(separator: ", "))")
         } else {
@@ -66,10 +67,10 @@ struct List: ParsableCommand {
     )
 
     @Flag(name: .shortAndLong, help: "Output as JSON")
-    var json: Bool
+    var json = false
 
     @Flag(name: .shortAndLong, help: "Suppress informational output")
-    var quiet: Bool
+    var quiet = false
 
     mutating func run() throws {
         let presets = try DockPreset.list()
@@ -96,7 +97,7 @@ struct Delete: ParsableCommand {
     var name: String
 
     @Flag(name: .shortAndLong, help: "Suppress informational output")
-    var quiet: Bool
+    var quiet = false
 
     mutating func run() throws {
         try DockPreset.delete(named: name)

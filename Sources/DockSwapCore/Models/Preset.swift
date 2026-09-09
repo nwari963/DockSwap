@@ -39,10 +39,21 @@ public struct DockPreset: Codable, Equatable {
 
 /// A dock item discriminated by `type`.
 public enum DockItem: Codable, Equatable {
-    case app(AppItem)
-    case folder(FolderItem)
-    case url(URLItem)
+    /// JSON representation matches ticket 001 (discriminated objects).
+    case app(AppItemPayload)
+    case folder(FolderItemPayload)
+    case url(URLItemPayload)
     case spacer
+
+    /// Short human-readable label for the dry-run report.
+    public var description: String {
+        switch self {
+        case .app(let app): return app.identity.bundleId ?? app.identity.path ?? "app"
+        case .folder(let folder): return folder.path
+        case .url(let url): return url.url
+        case .spacer: return "spacer"
+        }
+    }
 
     public enum CodingKeys: String, CodingKey {
         case type, identity, path, view, display, sort, title, url
@@ -52,9 +63,9 @@ public enum DockItem: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let type = try c.decode(String.self, forKey: .type)
         switch type {
-        case "app":    self = .app(try AppItem(from: decoder))
-        case "folder": self = .folder(try FolderItem(from: decoder))
-        case "url":    self = .url(try URLItem(from: decoder))
+        case "app":    self = .app(try AppItemPayload(from: decoder))
+        case "folder": self = .folder(try FolderItemPayload(from: decoder))
+        case "url":    self = .url(try URLItemPayload(from: decoder))
         case "spacer": self = .spacer
         default:
             throw DecodingError.dataCorrupted(
@@ -64,11 +75,10 @@ public enum DockItem: Codable, Equatable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .app(var item):
+        case .app(let item):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode("app", forKey: .type)
-            try c.encode(item.identity.bundleId, forKey: .identity)
-            try c.encode(item.identity.path, forKey: .path)
+            try c.encode(item.identity, forKey: .identity)
         case .folder(let item):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode("folder", forKey: .type)
@@ -82,8 +92,8 @@ public enum DockItem: Codable, Equatable {
             try c.encode(item.title, forKey: .title)
             try c.encode(item.url, forKey: .url)
         case .spacer:
-            var c = encoder.singleValueContainer()
-            try c.encode("spacer")
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode("spacer", forKey: .type)
         }
     }
 }
@@ -99,12 +109,14 @@ public struct AppIdentity: Codable, Equatable {
     }
 }
 
-public struct AppItem: Codable, Equatable {
+// MARK: - Codable item payloads (JSON mirrors ticket 001)
+
+public struct AppItemPayload: Codable, Equatable {
     public var identity: AppIdentity
     public init(identity: AppIdentity) { self.identity = identity }
 }
 
-public struct FolderItem: Codable, Equatable {
+public struct FolderItemPayload: Codable, Equatable {
     public var path: String
     public var view: String?
     public var display: String?
@@ -118,7 +130,7 @@ public struct FolderItem: Codable, Equatable {
     }
 }
 
-public struct URLItem: Codable, Equatable {
+public struct URLItemPayload: Codable, Equatable {
     public var title: String
     public var url: String
 
@@ -158,7 +170,6 @@ public struct DockListItem: Equatable {
 public func parseDockList(_ output: String) -> [DockListItem] {
     output
         .components(separatedBy: .newlines)
-        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         .compactMap { DockListItem(line: $0) }
         .filter { $0.section != "recent-apps" }
 }
@@ -182,23 +193,31 @@ public func captureLiveDock(from output: String, name: String) -> DockPreset {
 
     for item in items {
         if item.isSpacerRow {
-            item.section == "persistentOthers" ? others.append(.spacer) : apps.append(.spacer)
+            let targetSection = item.section.lowercased()
+            if targetSection == "persistentothers" { others.append(.spacer) } else { apps.append(.spacer) }
             continue
         }
 
         let section = item.section.lowercased()
         // Determine item type
-        let url = item.url
-        let isApp = url.hasSuffix(".app/")
+        let path = item.url
+
+        // An app: URL points at a .app bundle, OR a bundleId is present.
+        let isApp = path.hasSuffix(".app/") || !item.bundleId.isEmpty
         if isApp {
             let id = AppIdentity(
                 bundleId: item.bundleId.isEmpty ? nil : item.bundleId,
-                path: url.isEmpty ? nil : String(url.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? "")
+                path: path.isEmpty ? nil : String(path.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? "")
             )
-            let app = AppItem(identity: id)
+            let app = AppItemPayload(identity: id)
             section.contains("others") ? others.append(.app(app)) : apps.append(.app(app))
+        } else if path.hasSuffix("/") {
+            // Directory rows (stacks/folders) — no bundleId.
+            let folder = FolderItemPayload(path: String(path.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? ""))
+            section.contains("others") ? others.append(.folder(folder)) : apps.append(.folder(folder))
         } else {
-            let urlItem = URLItem(title: item.label, url: url)
+            // URL tile.
+            let urlItem = URLItemPayload(title: item.label, url: path)
             section.contains("others") ? others.append(.url(urlItem)) : apps.append(.url(urlItem))
         }
     }
