@@ -18,7 +18,8 @@ public struct DockDiffEngine {
 
         var args: [String] = []
         for item in removes { args.append(contentsOf: item.removeArgs) }
-        for item in adds { args.append(contentsOf: item.addArgs) }
+        args.append(contentsOf: addArgs(for: preset.apps, section: "apps", current: current))
+        args.append(contentsOf: addArgs(for: preset.others, section: "others", current: current))
 
         if !args.isEmpty { _ = try dockUtil.run(args) }
         return true
@@ -27,6 +28,46 @@ public struct DockDiffEngine {
     public func captureCurrentPreset() throws -> DockPreset {
         captureLiveDock(from: try dockUtil.run(["--list"]), name: "live")
     }
+}
+
+// MARK: - Anchored add args (ticket 003: preserve preset order)
+
+/// dockutil's `--position after` needs the *previous* item; the previous
+/// preset item may itself be a new add earlier in the batch, so we need the
+/// current dock's identity mapping **plus** the already-emitted prior adds.
+/// dockutil processes `--add` sequentially; anchoring to a just-added item works.
+private func addArgs(for items: [DockItem], section: String, current: DockPreset) -> [String] {
+    var result: [String] = []
+    var present = Set(current.items(in: section).compactMap { $0.dockutilAnchor })
+    for item in items {
+        // Spacers: use their preset position for anchoring
+        if case .spacer = item {
+            if let prev = presenterAnchor(before: item, in: items) {
+                result.append(contentsOf: ["--add", "spacer", "--section", section, "--position", "after", prev])
+            } else {
+                result.append(contentsOf: ["--add", "spacer", "--section", section])
+            }
+            continue
+        }
+        if present.contains(item.dockutilAnchor ?? "") { continue } // already in dock
+        var args = ["--add", item.dockutilAnchor ?? "", "--section", section]
+        if let prev = presenterAnchor(before: item, in: items) {
+            args.append(contentsOf: ["--position", "after", prev])
+        } else {
+            args.append(contentsOf: ["--position", "beginning"])
+        }
+        result.append(contentsOf: args)
+        if let anchor = item.dockutilAnchor { present.insert(anchor) }
+    }
+    return result
+}
+
+/// The identity anchor of the preset item immediately before `item` (preset order),
+/// if that predecessor is either already in the current dock or added earlier here.
+private func presenterAnchor(before target: DockItem, in items: [DockItem]) -> String? {
+    guard let idx = items.firstIndex(where: { $0 == target }) else { return nil }
+    guard idx > 0 else { return nil }
+    return items[idx - 1].dockutilAnchor
 }
 
 // MARK: - Diffing
@@ -115,12 +156,40 @@ private func section(for item: DockItem, in preset: DockPreset) -> String {
     return "apps"
 }
 
+// MARK: - DockPreset extensions
+
+extension DockPreset {
+    func items(in section: String) -> [DockItem] {
+        section == "others" ? others : apps
+    }
+
+    /// The dockutil anchor for a preset item: bundleId (apps) else path (apps/folders)
+    /// else full url (URLs). Never the label — labels are volatile (ticket 003§4).
+    func anchor(for item: DockItem) -> String? {
+        switch item {
+        case .app(let app): return app.identity.bundleId ?? app.identity.path
+        case .folder(let folder): return folder.path
+        case .url(let url): return url.url
+        case .spacer: return nil
+        }
+    }
+}
+
 // MARK: - DockItem extensions
 
 private extension DockItem {
     var isSpacer: Bool {
         if case .spacer = self { return true }
         return false
+    }
+
+    var dockutilAnchor: String? {
+        switch self {
+        case .app(let app): return app.identity.bundleId ?? app.identity.path
+        case .folder(let folder): return folder.path
+        case .url(let url): return url.url
+        case .spacer: return nil
+        }
     }
 
     func matches(_ other: DockItem) -> Bool {

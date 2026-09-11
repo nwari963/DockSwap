@@ -6,10 +6,48 @@ import DockSwapCore
 @main
 struct DockSwap: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "dockswap",
         abstract: "Save and switch macOS Dock presets",
+        version: "1.0.0",
         subcommands: [Save.self, Switch.self, List.self, Delete.self],
         defaultSubcommand: Picker.self
     )
+
+    /// Honours the exit-code contract (ticket 004): usage errors exit 1
+    /// (argument-parser's default is 64), and DockSwapError maps to 2-6.
+    static func main() {
+        do {
+            var command = try parseAsRoot()
+            try command.run()
+        } catch {
+            if let e = error as? DockSwapError {
+                FileHandle.standardError.write(Data("\(e.description)\n".utf8))
+                Foundation.exit(e.exitCode)
+            } else {
+                // ParserError .helpRequested / .versionRequested arrive here wrapped
+                // in CommandError; their description is an enum payload string.
+                let desc = String(describing: error)
+                if desc.contains("helpRequested") {
+                    print(DockSwap.helpMessage(includeHidden: false, columns: nil))
+                    Foundation.exit(0)
+                } else if desc.contains("versionRequested") {
+                    print(DockSwap.configuration.version)
+                    Foundation.exit(0)
+                } else {
+                    FileHandle.standardError.write(Data("Error: \(desc)\n".utf8))
+                    Foundation.exit(1)
+                }
+            }
+        }
+    }
+}
+
+/// Stable `list --json` shape (ticket 004).
+struct ListSummary: Codable {
+    let name: String
+    let apps: Int
+    let others: Int
+    let updatedAt: String
 }
 
 /// Save the current dock as a preset.
@@ -25,7 +63,7 @@ struct Save: ParsableCommand {
         let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
         let preset = try engine.captureCurrentPreset()
         try preset.save(to: name)
-        print("Saved preset \"\"\(name)\"\"")
+        print("Saved preset \"\(name)\"")
     }
 }
 
@@ -54,7 +92,7 @@ struct Switch: ParsableCommand {
         } else {
             let changed = try engine.apply(preset)
             if !quiet {
-                print(changed ? "Switched to preset \"\"\(name)\"\"" : "Already applied")
+                print(changed ? "Switched to preset \"\(name)\"" : "Already applied")
             }
         }
     }
@@ -76,8 +114,11 @@ struct List: ParsableCommand {
         let presets = try DockPreset.list()
         if json {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(presets)
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let summaries = presets.map {
+                ListSummary(name: $0.name, apps: $0.apps.count, others: $0.others.count, updatedAt: $0.updatedAt)
+            }
+            let data = try encoder.encode(summaries)
             print(String(data: data, encoding: .utf8)!)
         } else if !quiet {
             for preset in presets {
@@ -102,7 +143,7 @@ struct Delete: ParsableCommand {
     mutating func run() throws {
         try DockPreset.delete(named: name)
         if !quiet {
-            print("Deleted preset \"\"\(name)\"\"")
+            print("Deleted preset \"\(name)\"")
         }
     }
 }
@@ -120,7 +161,15 @@ struct Picker: ParsableCommand {
             return
         }
 
-        // TODO: Implement TUI picker
-        print("TUI picker not implemented yet")
+        guard let selected = try ANSIPicker(presets: presets).run() else {
+            print("Cancelled")
+            return
+        }
+
+        let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
+        let changed = try engine.apply(selected)
+        if !changed {
+            print("Already applied: \(selected.name)")
+        }
     }
 }
