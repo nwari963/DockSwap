@@ -63,7 +63,7 @@ struct Save: ParsableCommand {
         let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
         let preset = try engine.captureCurrentPreset()
         try preset.save(to: name)
-        print("Saved preset \"\(name)\"")
+        print("Saved '\(name)' (\(preset.apps.count) apps, \(preset.others.count) others).")
     }
 }
 
@@ -87,12 +87,17 @@ struct Switch: ParsableCommand {
         let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
         if dryRun {
             let (removes, adds) = diff(preset, from: try engine.captureCurrentPreset())
-            print("Would remove: \(removes.map { $0.item.description }.joined(separator: ", "))")
-            print("Would add: \(adds.map { $0.item.description }.joined(separator: ", "))")
+            print("Would switch to '\(name)':")
+            print("  remove: \(removes.map { $0.item.description }.joined(separator: ", "))")
+            print("  add:    \(adds.map { $0.item.description }.joined(separator: ", "))")
         } else {
-            let changed = try engine.apply(preset)
+            let result = try engine.apply(preset)
             if !quiet {
-                print(changed ? "Switched to preset \"\(name)\"" : "Already applied")
+                if let (removed, added) = result {
+                    print("Switched to '\(name)' (\(removed) removed, \(added) added).")
+                } else {
+                    print("already applied.")
+                }
             }
         }
     }
@@ -121,8 +126,11 @@ struct List: ParsableCommand {
             let data = try encoder.encode(summaries)
             print(String(data: data, encoding: .utf8)!)
         } else if !quiet {
+            let nameWidth = presets.map(\.name.count).max() ?? 0
             for preset in presets {
-                print("- \(preset.name)")
+                let itemCount = preset.apps.count + preset.others.count
+                let name = preset.name.padding(toLength: nameWidth, withPad: " ", startingAt: 0)
+                print("\(name)  \(itemCount) items  \(preset.updatedAt)")
             }
         }
     }
@@ -143,7 +151,7 @@ struct Delete: ParsableCommand {
     mutating func run() throws {
         try DockPreset.delete(named: name)
         if !quiet {
-            print("Deleted preset \"\(name)\"")
+            print("Deleted '\(name)'.")
         }
     }
 }
@@ -167,9 +175,11 @@ struct Picker: ParsableCommand {
         }
 
         let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
-        let changed = try engine.apply(selected)
-        if !changed {
-            print("Already applied: \(selected.name)")
+        let result = try engine.apply(selected)
+        if let (removed, added) = result {
+            print("Switched to '\(selected.name)' (\(removed) removed, \(added) added).")
+        } else {
+            print("already applied.")
         }
     }
 }

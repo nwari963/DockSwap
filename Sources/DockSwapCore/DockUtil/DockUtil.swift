@@ -47,6 +47,7 @@ public struct DockUtil: DockUtilExecuting {
 
         if p.terminationStatus != 0 {
             throw DockSwapError.dockutilFailed(
+                command: args,
                 output: stderr.isEmpty ? stdout : stderr,
                 exitCode: Int(p.terminationStatus)
             )

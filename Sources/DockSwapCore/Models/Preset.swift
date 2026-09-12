@@ -178,7 +178,7 @@ public func parseDockList(_ output: String) -> [DockListItem] {
 
 /// Capture the live dock using `dockutil --list` and convert to a preset.
 /// Section names from dockutil 3.1.3 come back as `persistentApps` / `persistentOthers`.
-public func captureLiveDock(from output: String, name: String) -> DockPreset {
+public func captureLiveDock(from output: String, name: String, dockutilVersion: String? = nil, macOSVersion: String? = nil) -> DockPreset {
     let items = parseDockList(output)
     var apps: [DockItem] = []
     var others: [DockItem] = []
@@ -227,8 +227,8 @@ public func captureLiveDock(from output: String, name: String) -> DockPreset {
         schemaVersion: currentSchemaVersion,
         createdAt: now,
         updatedAt: now,
-        dockutilVersion: "3.1.3",
-        macOSVersion: "26.5",
+        dockutilVersion: dockutilVersion,
+        macOSVersion: macOSVersion,
         apps: apps,
         others: others
     )

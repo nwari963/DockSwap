@@ -28,7 +28,11 @@ public struct ANSIPicker {
 
         // Draw initial UI
         var selectedIndex = 0
-        drawUI(selectedIndex: selectedIndex)
+        // 005: "second Enter on preset shows item list before apply" — the first
+        // Enter on a preset previews it; Enter again on the same, still-highlighted
+        // preset applies it. Moving the selection cancels the preview.
+        var previewIndex: Int? = nil
+        drawUI(selectedIndex: selectedIndex, previewIndex: previewIndex)
 
         // Handle input
         while true {
@@ -36,12 +40,18 @@ public struct ANSIPicker {
             switch key {
             case .up:
                 selectedIndex = max(0, selectedIndex - 1)
-                drawUI(selectedIndex: selectedIndex)
+                previewIndex = nil
+                drawUI(selectedIndex: selectedIndex, previewIndex: previewIndex)
             case .down:
                 selectedIndex = min(presets.count - 1, selectedIndex + 1)
-                drawUI(selectedIndex: selectedIndex)
+                previewIndex = nil
+                drawUI(selectedIndex: selectedIndex, previewIndex: previewIndex)
             case .enter:
-                return presets[selectedIndex]
+                if previewIndex == selectedIndex {
+                    return presets[selectedIndex]
+                }
+                previewIndex = selectedIndex
+                drawUI(selectedIndex: selectedIndex, previewIndex: previewIndex)
             case .q, .esc:
                 return nil
             case .number(let n):
@@ -55,7 +65,7 @@ public struct ANSIPicker {
     }
 
     /// Draw the UI.
-    private func drawUI(selectedIndex: Int) {
+    private func drawUI(selectedIndex: Int, previewIndex: Int?) {
         // Clear screen
         print("\u{001B}[2J\u{001B}[H", terminator: "")
 
@@ -64,19 +74,28 @@ public struct ANSIPicker {
         print("\u{001B}[1;34m\u{001B}[47m", terminator: "")
         print("\u{001B}[0m\n", terminator: "")
 
-        // Draw items
+        // Draw items (name + item count, ticket 005)
         for (index, preset) in presets.enumerated() {
             if index == selectedIndex {
                 print("\u{001B}[7m", terminator: "") // Reverse video
             }
-            print("[\u{001B}[1;33m\(index + 1)\u{001B}[0m] \(preset.name)")
+            let itemCount = preset.apps.count + preset.others.count
+            print("[\u{001B}[1;33m\(index + 1)\u{001B}[0m] \(preset.name)  \(itemCount) items")
             if index == selectedIndex {
                 print("\u{001B}[0m", terminator: "") // Reset
             }
         }
 
-        // Draw instructions
-        print("\nUse arrow keys to navigate, Enter to select, q/Esc to cancel", terminator: "")
+        if let previewIndex, previewIndex == selectedIndex {
+            let preset = presets[previewIndex]
+            print("\n\(preset.name):")
+            for item in preset.apps + preset.others {
+                print("  \(item.description)")
+            }
+            print("\nEnter again to apply, arrows to cancel preview, q/Esc to quit", terminator: "")
+        } else {
+            print("\nUse arrow keys to navigate, Enter to preview, q/Esc to cancel", terminator: "")
+        }
     }
 
     /// Read a key from stdin.

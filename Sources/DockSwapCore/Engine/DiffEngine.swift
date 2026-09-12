@@ -9,24 +9,32 @@ public struct DockDiffEngine {
         self.dockUtil = dockUtil
     }
 
-    public func apply(_ preset: DockPreset) throws -> Bool {
+    /// Applies `preset`. Returns `nil` when already applied (no-op, matches
+    /// ticket 003's short-circuit); otherwise the counts for the human-output
+    /// message (ticket 004: "Switched to '<name>' (N removed, M added).").
+    public func apply(_ preset: DockPreset) throws -> (removed: Int, added: Int)? {
         let current = try captureCurrentPreset()
-        guard !isApplied(preset, to: current) else { return false }
+        guard !isApplied(preset, to: current) else { return nil }
 
         let (removes, adds) = diff(preset, from: current)
-        guard !removes.isEmpty || !adds.isEmpty else { return false }
+        guard !removes.isEmpty || !adds.isEmpty else { return nil }
 
         var args: [String] = []
         for item in removes { args.append(contentsOf: item.removeArgs) }
-        args.append(contentsOf: addArgs(for: preset.apps, section: "apps", current: current))
-        args.append(contentsOf: addArgs(for: preset.others, section: "others", current: current))
+        args.append(contentsOf: addArgs(for: preset.apps, adds: adds, section: "apps", current: current))
+        args.append(contentsOf: addArgs(for: preset.others, adds: adds, section: "others", current: current))
 
         if !args.isEmpty { _ = try dockUtil.run(args) }
-        return true
+        return (removes.count, adds.count)
     }
 
     public func captureCurrentPreset() throws -> DockPreset {
-        captureLiveDock(from: try dockUtil.run(["--list"]), name: "live")
+        captureLiveDock(
+            from: try dockUtil.run(["--list"]),
+            name: "live",
+            dockutilVersion: try dockUtil.run(["--version"]).trimmingCharacters(in: .whitespacesAndNewlines),
+            macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString
+        )
     }
 }
 
@@ -36,12 +44,19 @@ public struct DockDiffEngine {
 /// preset item may itself be a new add earlier in the batch, so we need the
 /// current dock's identity mapping **plus** the already-emitted prior adds.
 /// dockutil processes `--add` sequentially; anchoring to a just-added item works.
-private func addArgs(for items: [DockItem], section: String, current: DockPreset) -> [String] {
+private func addArgs(for items: [DockItem], adds: [DiffItem], section: String, current: DockPreset) -> [String] {
     var result: [String] = []
-    var present = Set(current.items(in: section).compactMap { $0.dockutilAnchor })
+    let toAdd = adds.filter { $0.section == section }.map { $0.item }
+    var currentSpacerCount = current.items(in: section).filter { $0.isSpacer }.count
     for item in items {
-        // Spacers: use their preset position for anchoring
+        // Spacers carry no identity (003 rule 5): treat the current dock's existing
+        // spacers as already satisfying the earliest preset slots, and add only the
+        // excess, so a switch with other diffs doesn't duplicate spacers each time.
         if case .spacer = item {
+            if currentSpacerCount > 0 {
+                currentSpacerCount -= 1
+                continue
+            }
             if let prev = presenterAnchor(before: item, in: items) {
                 result.append(contentsOf: ["--add", "spacer", "--section", section, "--position", "after", prev])
             } else {
@@ -49,15 +64,14 @@ private func addArgs(for items: [DockItem], section: String, current: DockPreset
             }
             continue
         }
-        if present.contains(item.dockutilAnchor ?? "") { continue } // already in dock
-        var args = ["--add", item.dockutilAnchor ?? "", "--section", section]
+        guard toAdd.contains(item) else { continue } // already in dock (identity-matched by diff())
+        var args = DiffItem(item: item, section: section).addArgs
         if let prev = presenterAnchor(before: item, in: items) {
             args.append(contentsOf: ["--position", "after", prev])
         } else {
             args.append(contentsOf: ["--position", "beginning"])
         }
         result.append(contentsOf: args)
-        if let anchor = item.dockutilAnchor { present.insert(anchor) }
     }
     return result
 }
@@ -150,28 +164,11 @@ private func contains(_ item: DockItem, in preset: DockPreset, section sectionNa
     return candidates.contains(where: { $0.matches(item) })
 }
 
-private func section(for item: DockItem, in preset: DockPreset) -> String {
-    if preset.apps.contains(where: { $0.matches(item) }) { return "apps" }
-    if preset.others.contains(where: { $0.matches(item) }) { return "others" }
-    return "apps"
-}
-
 // MARK: - DockPreset extensions
 
 extension DockPreset {
     func items(in section: String) -> [DockItem] {
         section == "others" ? others : apps
-    }
-
-    /// The dockutil anchor for a preset item: bundleId (apps) else path (apps/folders)
-    /// else full url (URLs). Never the label — labels are volatile (ticket 003§4).
-    func anchor(for item: DockItem) -> String? {
-        switch item {
-        case .app(let app): return app.identity.bundleId ?? app.identity.path
-        case .folder(let folder): return folder.path
-        case .url(let url): return url.url
-        case .spacer: return nil
-        }
     }
 }
 
@@ -195,7 +192,13 @@ private extension DockItem {
     func matches(_ other: DockItem) -> Bool {
         switch (self, other) {
         case (.app(let lhs), .app(let rhs)):
-            return lhs.identity.bundleId == rhs.identity.bundleId || lhs.identity.path?.canonicalized == rhs.identity.path?.canonicalized
+            // 003 rule 1: match on bundleId only when both sides have one; a bare
+            // `bundleId == bundleId` would let two different path-only apps match
+            // via `nil == nil`, so fall through to path comparison otherwise.
+            if let lhsID = lhs.identity.bundleId, let rhsID = rhs.identity.bundleId {
+                return lhsID == rhsID
+            }
+            return lhs.identity.path?.canonicalized == rhs.identity.path?.canonicalized
         case (.folder(let lhs), .folder(let rhs)):
             return lhs.path.canonicalized == rhs.path.canonicalized
         case (.url(let lhs), .url(let rhs)):

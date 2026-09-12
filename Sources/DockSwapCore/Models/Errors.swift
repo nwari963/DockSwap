@@ -6,7 +6,7 @@ public enum DockSwapError: Error, CustomStringConvertible, Equatable {
     case presetNotFound(String)
     case dockutilMissing
     case invalidPreset(String)
-    case dockutilFailed(output: String, exitCode: Int)
+    case dockutilFailed(command: [String], output: String, exitCode: Int)
     case io(String)
 
     public var exitCode: Int32 {
@@ -30,9 +30,10 @@ public enum DockSwapError: Error, CustomStringConvertible, Equatable {
             return "dockutil not found — install with `brew install dockutil`"
         case .invalidPreset(let detail):
             return "invalid preset: \(detail)"
-        case .dockutilFailed(let output, let exitCode):
+        case .dockutilFailed(let command, let output, let exitCode):
             let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? "dockutil failed (exit \(exitCode))" : trimmed
+            let invocation = (["dockutil"] + command).joined(separator: " ")
+            return trimmed.isEmpty ? "\(invocation): failed (exit \(exitCode))" : "\(invocation): \(trimmed)"
         case .io(let detail):
             return detail
         }

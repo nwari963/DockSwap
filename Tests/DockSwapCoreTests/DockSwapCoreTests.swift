@@ -49,6 +49,18 @@ final class PresetTests: XCTestCase {
     }
 }
 
+final class ErrorTests: XCTestCase {
+    /// 002: "print dockutil's stderr verbatim prefixed with the failing dockutil command."
+    func testDockutilFailedDescriptionIncludesCommand() {
+        let error = DockSwapError.dockutilFailed(
+            command: ["--remove", "Safari", "--section", "apps"],
+            output: "dockutil: no such item",
+            exitCode: 1
+        )
+        XCTAssertEqual(error.description, "dockutil --remove Safari --section apps: dockutil: no such item")
+    }
+}
+
 final class DockUtilTests: XCTestCase {
     func testParseDockList() {
         let output = """
@@ -75,6 +87,19 @@ final class DockUtilTests: XCTestCase {
         XCTAssertEqual(parseDockutilVersion("3.1.3")?.major, 3)
         XCTAssertEqual(parseDockutilVersion("dockutil: version 2.1.0")?.major, 2)
         XCTAssertNil(parseDockutilVersion("nonsense"))
+    }
+}
+
+private final class MockDockUtil: DockUtilExecuting {
+    var listOutput = ""
+    var versionOutput = "3.1.3"
+    var applyArgs: [String] = []
+
+    func run(_ args: [String]) throws -> String {
+        if args == ["--list"] { return listOutput }
+        if args == ["--version"] { return versionOutput }
+        applyArgs = args
+        return ""
     }
 }
 
@@ -117,5 +142,72 @@ final class DiffEngineTests: XCTestCase {
 
         XCTAssertTrue(removes.isEmpty)
         XCTAssertTrue(adds.isEmpty)
+    }
+
+    /// Regression test for two bugs fixed together: `apply()` used to re-emit
+    /// `--add spacer` for every preset spacer whenever anything else in the
+    /// section differed (breaking 003's "switching twice is idempotent"), and
+    /// its `--add` value for apps was the bundleId instead of the path dockutil
+    /// requires.
+    func testApplySkipsExistingSpacerAndAddsAppByPath() throws {
+        let mock = MockDockUtil()
+        mock.listOutput = """
+        Old\tfile:///Applications/Old.app/\tpersistentApps\t/plist\tcom.example.old
+        \t\tpersistentApps\t\t
+        """
+        let engine = DockDiffEngine(dockUtil: mock)
+        let preset = DockPreset(
+            name: "preset",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [
+                .spacer,
+                .app(AppItemPayload(identity: AppIdentity(bundleId: "com.example.new", path: "/Applications/New.app"))),
+            ]
+        )
+
+        let result = try engine.apply(preset)
+
+        XCTAssertEqual(result?.removed, 1)
+        XCTAssertEqual(result?.added, 1)
+        XCTAssertFalse(mock.applyArgs.contains("spacer"), "existing spacer must not be re-added")
+        XCTAssertTrue(mock.applyArgs.contains("/Applications/New.app"), "app add must use path, not bundleId")
+        XCTAssertFalse(mock.applyArgs.contains("com.example.new"), "bundleId is not a valid --add value")
+    }
+
+    /// 003 rule 1 only matches on bundleId when *both* sides have one; two
+    /// different path-only apps must not falsely match via `nil == nil`
+    /// (which would make `diff` see no change at all here).
+    func testDiffDoesNotConflatePathOnlyApps() {
+        let current = DockPreset(
+            name: "current",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [.app(AppItemPayload(identity: AppIdentity(path: "/Applications/A.app")))]
+        )
+        let preset = DockPreset(
+            name: "preset",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [.app(AppItemPayload(identity: AppIdentity(path: "/Applications/B.app")))]
+        )
+
+        let (removes, adds) = diff(preset, from: current)
+
+        XCTAssertEqual(removes.count, 1)
+        XCTAssertEqual(adds.count, 1)
+    }
+
+    /// 001: preset metadata should snapshot the *real* dockutil/macOS versions,
+    /// not a hardcoded placeholder.
+    func testCaptureCurrentPresetSnapshotsRealVersions() throws {
+        let mock = MockDockUtil()
+        mock.versionOutput = "3.1.3"
+        let engine = DockDiffEngine(dockUtil: mock)
+
+        let preset = try engine.captureCurrentPreset()
+
+        XCTAssertEqual(preset.dockutilVersion, "3.1.3")
+        XCTAssertEqual(preset.macOSVersion, ProcessInfo.processInfo.operatingSystemVersionString)
     }
 }
