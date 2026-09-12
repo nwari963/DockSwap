@@ -52,7 +52,7 @@ public struct ANSIPicker {
                 }
                 previewIndex = selectedIndex
                 drawUI(selectedIndex: selectedIndex, previewIndex: previewIndex)
-            case .q, .esc:
+            case .q, .esc, .eof:
                 return nil
             case .number(let n):
                 if n > 0 && n <= presets.count {
@@ -101,7 +101,9 @@ public struct ANSIPicker {
     /// Read a key from stdin.
     private func readKey() -> Key {
         let c = getchar()
-        if c == 27 {
+        if c == EOF {
+            return .eof
+        } else if c == 27 {
             let next = getchar()
             if next == 91 {
                 let code = getchar()
@@ -127,5 +129,9 @@ public struct ANSIPicker {
 
 /// Keys that the picker can handle.
 private enum Key {
-    case up, down, enter, q, esc, number(Int), unknown
+    // .eof is distinct from .unknown: an unrecognized real keypress is safe to
+    // ignore and keep reading, but getchar() returning EOF (stdin closed/not a
+    // tty) means there is nothing left to read — treating that as .unknown
+    // spun the main loop at 100% CPU forever instead of exiting.
+    case up, down, enter, q, esc, number(Int), unknown, eof
 }

@@ -9,7 +9,7 @@ struct DockSwap: ParsableCommand {
         commandName: "dockswap",
         abstract: "Save and switch macOS Dock presets",
         version: "1.0.0",
-        subcommands: [Save.self, Switch.self, List.self, Delete.self],
+        subcommands: [Save.self, Switch.self, List.self, Delete.self, Picker.self],
         defaultSubcommand: Picker.self
     )
 
@@ -159,7 +159,8 @@ struct Delete: ParsableCommand {
 /// The TUI picker.
 struct Picker: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Open the TUI picker"
+        abstract: "Open the TUI picker",
+        shouldDisplay: false // ticket 004: bare invocation only, no `ui` subcommand
     )
 
     mutating func run() throws {

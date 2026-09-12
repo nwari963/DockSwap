@@ -21,3 +21,21 @@ jobs:
 
     - name: Test
       run: swift test
+
+    # swift test only covers DockSwapCore; it can't see bugs in the
+    # executable's own ArgumentParser wiring (ticket 004's "no subcommand ->
+    # picker" contract broke twice, invisibly, with 13/13 tests green: once
+    # because the default subcommand wasn't registered, once because the
+    # picker spun at 100% CPU forever on EOF instead of exiting). Run the
+    # actual binary bare, non-interactively, and require it to exit promptly.
+    - name: Smoke test bare invocation
+      run: |
+        .build/release/dockswap < /dev/null &
+        pid=$!
+        sleep 5
+        if kill -0 $pid 2>/dev/null; then
+          kill -9 $pid
+          echo "::error::bare invocation hung for 5s instead of exiting"
+          exit 1
+        fi
+        wait $pid
