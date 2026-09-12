@@ -65,7 +65,7 @@ private func addArgs(for items: [DockItem], adds: [DiffItem], section: DockSecti
                 continue
             }
             if let prev = predecessorAnchor(before: item, in: items) {
-                result.append(contentsOf: ["--add", "spacer", "--section", section.rawValue, "--position", "after", prev])
+                result.append(contentsOf: ["--add", "spacer", "--section", section.rawValue, "--after", prev])
             } else {
                 result.append(contentsOf: ["--add", "spacer", "--section", section.rawValue])
             }
@@ -74,7 +74,10 @@ private func addArgs(for items: [DockItem], adds: [DiffItem], section: DockSecti
         guard toAdd.contains(item) else { continue } // already in dock (identity-matched by diff())
         var args = DiffItem(item: item, section: section).addArgs
         if let prev = predecessorAnchor(before: item, in: items) {
-            args.append(contentsOf: ["--position", "after", prev])
+            // dockutil's anchor flag is `--after <label>`; `--position` only
+            // takes an index or beginning/end/middle keyword (found via manual
+            // QA against a real Dock — `--position after <label>` is rejected).
+            args.append(contentsOf: ["--after", prev])
         } else {
             args.append(contentsOf: ["--position", "beginning"])
         }

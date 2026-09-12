@@ -175,6 +175,30 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertFalse(mock.applyArgs.contains("com.example.new"), "bundleId is not a valid --add value")
     }
 
+    /// Regression test for a bug only manual QA against a real Dock caught:
+    /// dockutil's anchor flag is `--after <label>`, a flag distinct from
+    /// `--position` (which only takes an index or beginning/end/middle).
+    /// `--position after <label>` is rejected by the real binary, even
+    /// though every mocked test here was happy with it.
+    func testAnchoredAddUsesAfterFlagNotPositionAfter() throws {
+        let mock = MockDockUtil()
+        mock.listOutput = "Existing\tfile:///Applications/Existing.app/\tpersistentApps\t/plist\tcom.example.existing\n"
+        let engine = DockDiffEngine(dockUtil: mock)
+        let preset = DockPreset(
+            name: "preset",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [
+                .app(AppItemPayload(identity: AppIdentity(bundleId: "com.example.existing", path: "/Applications/Existing.app"))),
+                .app(AppItemPayload(identity: AppIdentity(bundleId: "com.example.new", path: "/Applications/New.app"))),
+            ]
+        )
+
+        _ = try engine.apply(preset)
+
+        XCTAssertEqual(mock.applyArgs, ["--add", "/Applications/New.app", "--section", "apps", "--after", "com.example.existing"])
+    }
+
     /// 003 rule 1 only matches on bundleId when *both* sides have one; two
     /// different path-only apps must not falsely match via `nil == nil`
     /// (which would make `diff` see no change at all here).
