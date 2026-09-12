@@ -1,5 +1,12 @@
 import Foundation
 
+/// The two sides of the Dock's persistent items, per ticket 001. Raw values
+/// match dockutil's `--section` argument.
+public enum DockSection: String {
+    case apps
+    case others
+}
+
 // MARK: - Apply
 
 public struct DockDiffEngine {
@@ -21,8 +28,8 @@ public struct DockDiffEngine {
 
         var args: [String] = []
         for item in removes { args.append(contentsOf: item.removeArgs) }
-        args.append(contentsOf: addArgs(for: preset.apps, adds: adds, section: "apps", current: current))
-        args.append(contentsOf: addArgs(for: preset.others, adds: adds, section: "others", current: current))
+        args.append(contentsOf: addArgs(for: preset.apps, adds: adds, section: .apps, current: current))
+        args.append(contentsOf: addArgs(for: preset.others, adds: adds, section: .others, current: current))
 
         if !args.isEmpty { _ = try dockUtil.run(args) }
         return (removes.count, adds.count)
@@ -44,7 +51,7 @@ public struct DockDiffEngine {
 /// preset item may itself be a new add earlier in the batch, so we need the
 /// current dock's identity mapping **plus** the already-emitted prior adds.
 /// dockutil processes `--add` sequentially; anchoring to a just-added item works.
-private func addArgs(for items: [DockItem], adds: [DiffItem], section: String, current: DockPreset) -> [String] {
+private func addArgs(for items: [DockItem], adds: [DiffItem], section: DockSection, current: DockPreset) -> [String] {
     var result: [String] = []
     let toAdd = adds.filter { $0.section == section }.map { $0.item }
     var currentSpacerCount = current.items(in: section).filter { $0.isSpacer }.count
@@ -57,16 +64,16 @@ private func addArgs(for items: [DockItem], adds: [DiffItem], section: String, c
                 currentSpacerCount -= 1
                 continue
             }
-            if let prev = presenterAnchor(before: item, in: items) {
-                result.append(contentsOf: ["--add", "spacer", "--section", section, "--position", "after", prev])
+            if let prev = predecessorAnchor(before: item, in: items) {
+                result.append(contentsOf: ["--add", "spacer", "--section", section.rawValue, "--position", "after", prev])
             } else {
-                result.append(contentsOf: ["--add", "spacer", "--section", section])
+                result.append(contentsOf: ["--add", "spacer", "--section", section.rawValue])
             }
             continue
         }
         guard toAdd.contains(item) else { continue } // already in dock (identity-matched by diff())
         var args = DiffItem(item: item, section: section).addArgs
-        if let prev = presenterAnchor(before: item, in: items) {
+        if let prev = predecessorAnchor(before: item, in: items) {
             args.append(contentsOf: ["--position", "after", prev])
         } else {
             args.append(contentsOf: ["--position", "beginning"])
@@ -78,7 +85,7 @@ private func addArgs(for items: [DockItem], adds: [DiffItem], section: String, c
 
 /// The identity anchor of the preset item immediately before `item` (preset order),
 /// if that predecessor is either already in the current dock or added earlier here.
-private func presenterAnchor(before target: DockItem, in items: [DockItem]) -> String? {
+private func predecessorAnchor(before target: DockItem, in items: [DockItem]) -> String? {
     guard let idx = items.firstIndex(where: { $0 == target }) else { return nil }
     guard idx > 0 else { return nil }
     return items[idx - 1].dockutilAnchor
@@ -92,31 +99,27 @@ public func diff(_ preset: DockPreset, from current: DockPreset) -> ([DiffItem],
 
     for item in current.apps {
         if item.isSpacer { continue }          // spacers are positional; never remove (003)
-        let sectionName = "apps"
-        if !contains(item, in: preset, section: sectionName) {
-            removes.append(DiffItem(item: item, section: sectionName))
+        if !contains(item, in: preset, section: .apps) {
+            removes.append(DiffItem(item: item, section: .apps))
         }
     }
     for item in current.others {
         if item.isSpacer { continue }
-        let sectionName = "others"
-        if !contains(item, in: preset, section: sectionName) {
-            removes.append(DiffItem(item: item, section: sectionName))
+        if !contains(item, in: preset, section: .others) {
+            removes.append(DiffItem(item: item, section: .others))
         }
     }
 
     for item in preset.apps {
         if item.isSpacer { continue }          // add spacers positionally only via adds of other items (ponytail: simple order handling)
-        let sectionName = "apps"
-        if !contains(item, in: current, section: sectionName) {
-            adds.append(DiffItem(item: item, section: sectionName))
+        if !contains(item, in: current, section: .apps) {
+            adds.append(DiffItem(item: item, section: .apps))
         }
     }
     for item in preset.others {
         if item.isSpacer { continue }
-        let sectionName = "others"
-        if !contains(item, in: current, section: sectionName) {
-            adds.append(DiffItem(item: item, section: sectionName))
+        if !contains(item, in: current, section: .others) {
+            adds.append(DiffItem(item: item, section: .others))
         }
     }
 
@@ -130,16 +133,16 @@ public func isApplied(_ preset: DockPreset, to current: DockPreset) -> Bool {
 
 public struct DiffItem {
     public let item: DockItem
-    public let section: String
+    public let section: DockSection
 
     public var removeArgs: [String] {
         switch item {
         case .app(let app):
-            if let bundleId = app.identity.bundleId { return ["--remove", bundleId, "--section", section] }
-            else if let path = app.identity.path { return ["--remove", path, "--section", section] }
+            if let bundleId = app.identity.bundleId { return ["--remove", bundleId, "--section", section.rawValue] }
+            else if let path = app.identity.path { return ["--remove", path, "--section", section.rawValue] }
             else { return [] }
-        case .folder(let folder): return ["--remove", folder.path, "--section", section]
-        case .url(let url): return ["--remove", url.url, "--section", section]
+        case .folder(let folder): return ["--remove", folder.path, "--section", section.rawValue]
+        case .url(let url): return ["--remove", url.url, "--section", section.rawValue]
         case .spacer: return []
         }
     }
@@ -147,19 +150,19 @@ public struct DiffItem {
     public var addArgs: [String] {
         switch item {
         case .app(let app):
-            if let path = app.identity.path { return ["--add", path, "--section", section] }
+            if let path = app.identity.path { return ["--add", path, "--section", section.rawValue] }
             else { return [] }
-        case .folder(let folder): return ["--add", folder.path, "--section", section]
-        case .url(let url): return ["--add", url.url, "--section", section]
-        case .spacer: return ["--add", "spacer", "--section", section]
+        case .folder(let folder): return ["--add", folder.path, "--section", section.rawValue]
+        case .url(let url): return ["--add", url.url, "--section", section.rawValue]
+        case .spacer: return ["--add", "spacer", "--section", section.rawValue]
         }
     }
 }
 
 // MARK: - Identity helpers
 
-private func contains(_ item: DockItem, in preset: DockPreset, section sectionName: String) -> Bool {
-    let candidates = sectionName == "others" ? preset.others : preset.apps
+private func contains(_ item: DockItem, in preset: DockPreset, section: DockSection) -> Bool {
+    let candidates = section == .others ? preset.others : preset.apps
     if item.isSpacer { return candidates.contains(where: { $0.isSpacer }) }
     return candidates.contains(where: { $0.matches(item) })
 }
@@ -167,8 +170,8 @@ private func contains(_ item: DockItem, in preset: DockPreset, section sectionNa
 // MARK: - DockPreset extensions
 
 extension DockPreset {
-    func items(in section: String) -> [DockItem] {
-        section == "others" ? others : apps
+    func items(in section: DockSection) -> [DockItem] {
+        section == .others ? others : apps
     }
 }
 

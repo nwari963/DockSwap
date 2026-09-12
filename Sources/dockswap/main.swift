@@ -24,17 +24,17 @@ struct DockSwap: ParsableCommand {
                 FileHandle.standardError.write(Data("\(e.description)\n".utf8))
                 Foundation.exit(e.exitCode)
             } else {
-                // ParserError .helpRequested / .versionRequested arrive here wrapped
-                // in CommandError; their description is an enum payload string.
-                let desc = String(describing: error)
-                if desc.contains("helpRequested") {
-                    print(DockSwap.helpMessage(includeHidden: false, columns: nil))
-                    Foundation.exit(0)
-                } else if desc.contains("versionRequested") {
-                    print(DockSwap.configuration.version)
+                // ArgumentParser's own errors (help/version requests, unknown
+                // option, etc.) aren't publicly typed, but fullMessage(for:)/
+                // exitCode(for:) are the sanctioned public API for rendering them.
+                let message = DockSwap.fullMessage(for: error)
+                if DockSwap.exitCode(for: error) == .success {
+                    print(message)
                     Foundation.exit(0)
                 } else {
-                    FileHandle.standardError.write(Data("Error: \(desc)\n".utf8))
+                    FileHandle.standardError.write(Data("\(message)\n".utf8))
+                    // Ticket 004 pins usage/validation errors to exit 1, not
+                    // ArgumentParser's default EX_USAGE (64).
                     Foundation.exit(1)
                 }
             }
