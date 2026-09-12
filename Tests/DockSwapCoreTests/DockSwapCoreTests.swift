@@ -47,6 +47,30 @@ final class PresetTests: XCTestCase {
         XCTAssertEqual(preset.apps.count, 0)
         XCTAssertEqual(preset.others.count, 0)
     }
+
+    /// Regression test: a plain https:// URL tile whose href ends in "/"
+    /// (the common case — most homepages do) was misclassified as a folder
+    /// because classification used to key off a trailing "/" instead of the
+    /// "file://" scheme, then corrupted the url by stripping a "file://"-
+    /// length prefix that was never there. Found via manual QA: a captured
+    /// "https://anthropic.com/" turned into a bogus "/anthropic.com" folder,
+    /// which dockutil then couldn't find to remove on the next switch.
+    func testCaptureLiveDockURLTileNotMisclassifiedAsFolder() {
+        let output = "Anthropic\thttps://anthropic.com/\tpersistentOthers\t/plist\t\n"
+        let preset = captureLiveDock(from: output, name: "test")
+        XCTAssertEqual(preset.others, [.url(URLItemPayload(title: "Anthropic", url: "https://anthropic.com/"))])
+    }
+
+    /// Regression test: real dockutil 3.1.3 represents an added spacer with
+    /// a literal "spacer" label and a synthetic <home>/spacer url — not the
+    /// fully-empty row ticket 001's research assumed. Without recognizing
+    /// this, a captured spacer became a bogus URL item eligible for removal,
+    /// violating ticket 003 rule 5 ("spacers are never removal candidates").
+    func testCaptureLiveDockRecognizesRealSpacerRow() {
+        let output = "spacer\t/Users/example/spacer\tpersistentOthers\t/plist\t\n"
+        let preset = captureLiveDock(from: output, name: "test")
+        XCTAssertEqual(preset.others, [.spacer])
+    }
 }
 
 final class ErrorTests: XCTestCase {

@@ -211,12 +211,24 @@ public func captureLiveDock(from output: String, name: String, dockutilVersion: 
             )
             let app = AppItemPayload(identity: id)
             section.contains("others") ? others.append(.app(app)) : apps.append(.app(app))
-        } else if path.hasSuffix("/") {
-            // Directory rows (stacks/folders) — no bundleId.
+        } else if path.hasPrefix("file://") {
+            // Directory rows (stacks/folders): classify by scheme, not by a
+            // trailing "/" — a plain https:// URL tile very commonly ends in
+            // "/" too and isn't a folder, so that heuristic misclassified it
+            // as one and corrupted its url by stripping a "file://"-length
+            // prefix that was never there (found via manual QA).
             let folder = FolderItemPayload(path: String(path.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? ""))
             section.contains("others") ? others.append(.folder(folder)) : apps.append(.folder(folder))
+        } else if item.bundleId.isEmpty && ["spacer", "small-spacer", "flex-spacer"].contains(item.label) {
+            // Real dockutil 3.1.3 represents an added spacer with a literal
+            // "spacer"-family label and a synthetic <home>/spacer url, not
+            // the fully-empty row isSpacerRow (and ticket 001's research)
+            // assumed — confirmed by round-tripping a real spacer through
+            // capture. Without this, a captured spacer became a bogus URL
+            // item, eligible for removal, violating ticket 003 rule 5.
+            section.contains("others") ? others.append(.spacer) : apps.append(.spacer)
         } else {
-            // URL tile.
+            // URL tile: keep the url exactly as reported, no stripping.
             let urlItem = URLItemPayload(title: item.label, url: path)
             section.contains("others") ? others.append(.url(urlItem)) : apps.append(.url(urlItem))
         }
