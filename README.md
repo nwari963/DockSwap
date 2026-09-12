@@ -6,13 +6,20 @@ A lightweight, open-source CLI for saving and switching macOS Dock presets.
 
 ### Homebrew
 
+The formula lives in this repo rather than a separate `homebrew-dockswap`
+tap, so it needs the explicit tap URL (the `user/repo` shorthand only works
+for a tap repo literally named `homebrew-<name>`):
+
 ```sh
-brew install nwari963/dockswap/dockswap
+brew tap nwari963/dockswap https://github.com/nwari963/DockSwap
+brew install dockswap
 ```
+
+Homebrew may prompt you to trust this third-party tap the first time.
 
 ### Binary
 
-Download from [GitHub Releases](https://github.com/nwari963/dockswap/releases).
+Download from [GitHub Releases](https://github.com/nwari963/DockSwap/releases).
 
 Releases are **unsigned** (no Apple Developer ID yet), so Gatekeeper will
 block the first launch. Clear the quarantine flag once after downloading:
@@ -24,8 +31,8 @@ xattr -d com.apple.quarantine dockswap
 ### Build from source
 
 ```sh
-git clone https://github.com/nwari963/dockswap.git
-cd dockswap
+git clone https://github.com/nwari963/DockSwap.git
+cd DockSwap
 swift build -c release
 cp .build/release/dockswap /usr/local/bin/
 ```
