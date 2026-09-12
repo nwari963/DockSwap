@@ -1,0 +1,39 @@
+# Xcode
+.DS_Store
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata
+
+# Swift
+.build
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Homebrew
+*.bottle.*
+
+# Misc
+*.swp
+*.swo
+*.orig
+*.rej
+*.log
+*.tmp
+*.out
+*.bak
+*.old
+*.patch
+*.diff
+*.orig
+*.rej
+*.log
+*.tmp
+*.out
+*.bak
+*.old
+*.patch
+*.diff

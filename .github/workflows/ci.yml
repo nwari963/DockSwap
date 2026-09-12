@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # macos-latest ships an Xcode toolchain with Swift preinstalled; no
+    # setup-swift step needed (and pinning it to an exact patch version
+    # broke when that toolchain wasn't downloadable on the runner).
+    - name: Build
+      run: swift build -c release
+
+    - name: Test
+      run: swift test
