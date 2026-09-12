@@ -14,6 +14,13 @@ brew install nwari963/dockswap/dockswap
 
 Download from [GitHub Releases](https://github.com/nwari963/dockswap/releases).
 
+Releases are **unsigned** (no Apple Developer ID yet), so Gatekeeper will
+block the first launch. Clear the quarantine flag once after downloading:
+
+```sh
+xattr -d com.apple.quarantine dockswap
+```
+
 ### Build from source
 
 ```sh

@@ -1,8 +1,8 @@
 class Dockswap < Formula
   desc "Save and switch macOS Dock presets"
-  homepage "https://github.com/nwari963/dockswap"
-  url "https://github.com/nwari963/dockswap/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "[SHA256_HERE]"
+  homepage "https://github.com/nwari963/DockSwap"
+  url "https://github.com/nwari963/DockSwap/archive/refs/tags/0.1.0.tar.gz"
+  sha256 "[SHA256_HERE]" # filled in once the 0.1.0 tag exists
   license "MIT"
 
   depends_on :macos
