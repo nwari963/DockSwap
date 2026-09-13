@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "DockSwapCore", targets: ["DockSwapCore"]),
         .executable(name: "dockswap", targets: ["dockswap"]),
+        .executable(name: "DockSwapMenuBar", targets: ["DockSwapMenuBar"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
@@ -24,6 +25,10 @@ let package = Package(
                 "DockSwapCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
+        ),
+        .executableTarget(
+            name: "DockSwapMenuBar",
+            dependencies: ["DockSwapCore"]
         ),
         .testTarget(
             name: "DockSwapCoreTests",
