@@ -8,17 +8,30 @@ import DockSwapCore
 // visible via `defaults write com.apple.controlcenter`. Verified via debug
 // logging that the item is genuinely created (isVisible == true, valid
 // button, icon loads) and via `System Events` that the process runs
-// correctly as a background-only app. Properly bundled as a real .app with
-// a matching CFBundleIdentifier/code-signature identifier, ad-hoc signed
-// with the hardened runtime flag (matching how a known-working third-party
-// menu bar app is signed) — no change. The one remaining, unverified
-// difference from that known-working app is a real Apple Developer ID
-// signature (this app only has one available: TeamIdentifier=not set).
-// Leaving this as real, reusable, buildable code — the CLI + TUI already
-// ship and work fully — but the actual menu bar rendering is blocked on
-// something about this OS version's status-item hosting that postdates
-// available documentation. Revisit with either a real Developer ID to test
-// signing properly, or once this is better understood.
+// correctly as a background-only app, but `visible` is reported false at
+// the process level (unlike a normal windowed app, which reports true —
+// see DockSwapEditor). Properly bundled as a real .app with a matching
+// CFBundleIdentifier/code-signature identifier, ad-hoc signed with the
+// hardened runtime flag — no change.
+//
+// Confirmed via research (2026-09-13): this is a known, widespread,
+// currently-unfixable OS bug, not specific to this app or its signing.
+// Multiple properly signed-and-notarized third-party apps hit the
+// identical symptom — status item exists in-process, Control Center never
+// hosts it — including CodexBar (github.com/steipete/CodexBar/issues/3377,
+// which explicitly ruled out signing as the cause) and BetterDisplay
+// (github.com/waydabber/BetterDisplay/issues/5314). An Apple DTS engineer
+// reproduced it directly on the Apple Developer Forums
+// (developer.apple.com/forums/thread/806691), filed it as FB21015611, and
+// called it "likely unfixable app-side." A real Apple Developer ID is
+// therefore NOT a documented or evidenced fix — CodexBar has one and is
+// broken the same way.
+//
+// Decision: parked, not abandoned. Revisit only once Apple ships a fix for
+// FB21015611 (or an equivalent report) — no further app-side workaround is
+// worth chasing until then. The CLI + TUI, and now DockSwapEditor (a normal
+// windowed app, unaffected since it doesn't go through Control Center's
+// hosting path at all), already cover real usage.
 
 /// Menu bar companion to the `dockswap` CLI (BUILD-PLAYBOOK.md's post-MVP
 /// GUI). Lists saved presets; clicking one switches to it. Save/delete stay
