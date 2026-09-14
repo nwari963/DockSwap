@@ -20,6 +20,16 @@ public struct DockDiffEngine {
     /// ticket 003's short-circuit); otherwise the counts for the human-output
     /// message (ticket 004: "Switched to '<name>' (N removed, M added).").
     public func apply(_ preset: DockPreset) throws -> (removed: Int, added: Int)? {
+        // A group's backing directory must reflect its current member list before
+        // dockutil ever looks at it — this is independent of whether the folder
+        // itself is a dockutil-level add/remove, since an existing group's members
+        // can change without its Dock-visible path changing at all.
+        for item in preset.apps + preset.others {
+            if case .folder(let folder) = item, let members = folder.members {
+                try GroupStore.materialize(at: folder.path, members: members)
+            }
+        }
+
         let current = try captureCurrentPreset()
         guard !isApplied(preset, to: current) else { return nil }
 
@@ -155,7 +165,17 @@ public struct DiffItem {
         case .app(let app):
             if let path = app.identity.path { return ["--add", path, "--section", section.rawValue] }
             else { return [] }
-        case .folder(let folder): return ["--add", folder.path, "--section", section.rawValue]
+        case .folder(let folder):
+            var args = ["--add", folder.path, "--section", section.rawValue]
+            let isGroup = folder.members != nil
+            // A group's view/display default to the configuration verified live
+            // against a real Dock (ticket #4); a plain folder's default to nothing,
+            // leaving dockutil's own default exactly as before this change.
+            if let view = folder.view ?? (isGroup ? "grid" : nil) { args += ["--view", view] }
+            if let display = folder.display ?? (isGroup ? "folder" : nil) { args += ["--display", display] }
+            if let sort = folder.sort { args += ["--sort", sort] }
+            if let name = folder.name { args += ["--label", name] }
+            return args
         case .url(let url): return ["--add", url.url, "--section", section.rawValue]
         case .spacer: return ["--add", "spacer", "--section", section.rawValue]
         }

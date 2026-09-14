@@ -73,6 +73,107 @@ final class PresetTests: XCTestCase {
     }
 }
 
+final class GroupSchemaTests: XCTestCase {
+    func testFolderItemGroupCodableRoundtrip() throws {
+        let folder = DockItem.folder(FolderItemPayload(
+            path: "/Users/x/.dockswap/groups/work/abc-123",
+            name: "Design Tools",
+            members: [AppIdentity(bundleId: "com.example.app", path: "/Applications/Example.app")]
+        ))
+        let preset = DockPreset(
+            name: "work", createdAt: "2026-09-14T00:00:00Z", updatedAt: "2026-09-14T00:00:00Z", apps: [folder])
+
+        let data = try JSONEncoder().encode(preset)
+        let decoded = try JSONDecoder().decode(DockPreset.self, from: data)
+        XCTAssertEqual(preset, decoded)
+
+        let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let apps = object["apps"] as! [[String: Any]]
+        XCTAssertEqual(apps[0]["name"] as? String, "Design Tools")
+        XCTAssertNotNil(apps[0]["members"])
+    }
+
+    /// A plain, non-group folder (the pre-existing browse-to-directory flow)
+    /// must not gain `name`/`members` keys it never asked for.
+    func testFolderItemPlainHasNoNameOrMembersKeys() throws {
+        let folder = DockItem.folder(FolderItemPayload(path: "/Users/x/Documents"))
+        let preset = DockPreset(
+            name: "work", createdAt: "2026-09-14T00:00:00Z", updatedAt: "2026-09-14T00:00:00Z", apps: [folder])
+        let data = try JSONEncoder().encode(preset)
+        let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let apps = object["apps"] as! [[String: Any]]
+        XCTAssertNil(apps[0]["name"])
+        XCTAssertNil(apps[0]["members"])
+    }
+
+    /// Lenient-reader contract: a preset file written before this schema change
+    /// (no `name`/`members` keys at all) must still decode successfully.
+    func testOldFormatFolderJSONStillDecodes() throws {
+        let json = """
+        {"name":"work","schemaVersion":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",\
+        "apps":[{"type":"folder","path":"/Users/x/Documents"}],"others":[]}
+        """
+        let preset = try JSONDecoder().decode(DockPreset.self, from: json.data(using: .utf8)!)
+        guard case .folder(let folder) = preset.apps[0] else { return XCTFail("expected folder") }
+        XCTAssertNil(folder.name)
+        XCTAssertNil(folder.members)
+    }
+}
+
+final class GroupStoreTests: XCTestCase {
+    private func makeScratchApps(_ names: [String]) throws -> (root: URL, apps: [URL]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        var apps: [URL] = []
+        for name in names {
+            let app = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            apps.append(app)
+        }
+        return (root, apps)
+    }
+
+    func testMaterializeCreatesResolvableAliases() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app", "AppB.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let groupDir = root.appendingPathComponent("group")
+        try GroupStore.materialize(at: groupDir.path, members: apps.map { AppIdentity(path: $0.path) })
+
+        let files = try FileManager.default.contentsOfDirectory(at: groupDir, includingPropertiesForKeys: nil)
+        XCTAssertEqual(Set(files.map(\.lastPathComponent)), Set(apps.map(\.lastPathComponent)))
+
+        let resolvedPaths = try Set(files.map {
+            try URL(resolvingAliasFileAt: $0, options: []).resolvingSymlinksInPath().path
+        })
+        XCTAssertEqual(resolvedPaths, Set(apps.map { $0.resolvingSymlinksInPath().path }))
+    }
+
+    /// Idempotent/convergent: re-materializing with a shrunk member list removes
+    /// the alias for the dropped member rather than leaving it orphaned.
+    func testMaterializeConvergesOnRemovedMember() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app", "AppB.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let groupDir = root.appendingPathComponent("group")
+
+        try GroupStore.materialize(at: groupDir.path, members: apps.map { AppIdentity(path: $0.path) })
+        try GroupStore.materialize(at: groupDir.path, members: [AppIdentity(path: apps[0].path)])
+
+        let files = try FileManager.default.contentsOfDirectory(at: groupDir, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.map(\.lastPathComponent), ["AppA.app"])
+    }
+
+    func testDissolveRemovesBackingDirectory() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let groupDir = root.appendingPathComponent("group")
+        try GroupStore.materialize(at: groupDir.path, members: [AppIdentity(path: apps[0].path)])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: groupDir.path))
+
+        GroupStore.dissolve(path: groupDir.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: groupDir.path))
+    }
+}
+
 final class ErrorTests: XCTestCase {
     /// 002: "print dockutil's stderr verbatim prefixed with the failing dockutil command."
     func testDockutilFailedDescriptionIncludesCommand() {
@@ -221,6 +322,38 @@ final class DiffEngineTests: XCTestCase {
         _ = try engine.apply(preset)
 
         XCTAssertEqual(mock.applyArgs, ["--add", "/Applications/New.app", "--section", "apps", "--after", "com.example.existing"])
+    }
+
+    /// A group folder (one with `members` set) gets the live-Dock-verified
+    /// `--view grid --display folder` configuration by default, plus `--label`
+    /// from its `name` — a plain folder's args are unaffected (no view/display
+    /// flags unless it explicitly sets them, exactly as before this change).
+    func testGroupFolderAddArgsIncludeViewDisplayLabel() throws {
+        let mock = MockDockUtil()
+        let engine = DockDiffEngine(dockUtil: mock)
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let appA = scratch.appendingPathComponent("AppA.app")
+        try FileManager.default.createDirectory(at: appA, withIntermediateDirectories: true)
+        let groupDir = scratch.appendingPathComponent("group").path
+
+        let preset = DockPreset(
+            name: "preset",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [
+                .folder(FolderItemPayload(path: groupDir, name: "Design Tools", members: [AppIdentity(path: appA.path)])),
+            ]
+        )
+
+        _ = try engine.apply(preset)
+
+        XCTAssertEqual(mock.applyArgs, [
+            "--add", groupDir, "--section", "apps",
+            "--view", "grid", "--display", "folder", "--label", "Design Tools",
+            "--position", "beginning",
+        ])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: groupDir), "apply must materialize the backing directory")
     }
 
     /// 003 rule 1 only matches on bundleId when *both* sides have one; two

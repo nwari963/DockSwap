@@ -56,7 +56,7 @@ public enum DockItem: Codable, Equatable {
     }
 
     public enum CodingKeys: String, CodingKey {
-        case type, identity, path, view, display, sort, title, url
+        case type, identity, path, view, display, sort, title, url, name, members
     }
 
     public init(from decoder: Decoder) throws {
@@ -86,6 +86,8 @@ public enum DockItem: Codable, Equatable {
             if let v = item.view { try c.encode(v, forKey: .view) }
             if let d = item.display { try c.encode(d, forKey: .display) }
             if let s = item.sort { try c.encode(s, forKey: .sort) }
+            if let n = item.name { try c.encode(n, forKey: .name) }
+            if let m = item.members { try c.encode(m, forKey: .members) }
         case .url(let item):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode("url", forKey: .type)
@@ -121,12 +123,21 @@ public struct FolderItemPayload: Codable, Equatable {
     public var view: String?
     public var display: String?
     public var sort: String?
+    /// Present only for a DockSwap-managed group (populated together with `members`);
+    /// nil for a plain, pre-existing folder added via the browse-to-directory flow.
+    public var name: String?
+    public var members: [AppIdentity]?
 
-    public init(path: String, view: String? = nil, display: String? = nil, sort: String? = nil) {
+    public init(
+        path: String, view: String? = nil, display: String? = nil, sort: String? = nil,
+        name: String? = nil, members: [AppIdentity]? = nil
+    ) {
         self.path = path
         self.view = view
         self.display = display
         self.sort = sort
+        self.name = name
+        self.members = members
     }
 }
 
