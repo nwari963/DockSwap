@@ -212,6 +212,10 @@ public func captureLiveDock(from output: String, name: String, dockutilVersion: 
         let section = item.section.lowercased()
         // Determine item type
         let path = item.url
+        // Real dockutil 3.1.3 spacers carry a literal "spacer"-family label
+        // with a synthetic bare <home>/spacer url (see below) — check the
+        // label before the folder branch, which also matches bare paths.
+        let isRealSpacerRow = item.bundleId.isEmpty && ["spacer", "small-spacer", "flex-spacer"].contains(item.label)
 
         // An app: URL points at a .app bundle, OR a bundleId is present.
         let isApp = path.hasSuffix(".app/") || !item.bundleId.isEmpty
@@ -222,15 +226,32 @@ public func captureLiveDock(from output: String, name: String, dockutilVersion: 
             )
             let app = AppItemPayload(identity: id)
             section.contains("others") ? others.append(.app(app)) : apps.append(.app(app))
-        } else if path.hasPrefix("file://") {
+        } else if path.hasPrefix("file://") || (path.hasPrefix("/") && !isRealSpacerRow) {
             // Directory rows (stacks/folders): classify by scheme, not by a
             // trailing "/" — a plain https:// URL tile very commonly ends in
             // "/" too and isn't a folder, so that heuristic misclassified it
             // as one and corrupted its url by stripping a "file://"-length
             // prefix that was never there (found via manual QA).
-            let folder = FolderItemPayload(path: String(path.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? ""))
+            // Two live formats: natively-created tiles carry file:// URLs,
+            // while directories dockutil adds itself are stored as bare POSIX
+            // paths (no scheme) — #10 live evidence. Both are folders.
+            let folderPath: String
+            if path.hasPrefix("file://") {
+                folderPath = String(path.dropFirst("file://".count).dropLast(1).removingPercentEncoding ?? "")
+            } else {
+                folderPath = (path as NSString).standardizingPath
+            }
+            // #10: a DockSwap-built group folder round-trips with its
+            // membership intact instead of degrading to a plain folder.
+            let folder: FolderItemPayload
+            if let (group, warnings) = GroupStore.recognizeGroup(at: folderPath, label: item.label) {
+                for w in warnings { FileHandle.standardError.write(Data((w + "\n").utf8)) }
+                folder = group
+            } else {
+                folder = FolderItemPayload(path: folderPath)
+            }
             section.contains("others") ? others.append(.folder(folder)) : apps.append(.folder(folder))
-        } else if item.bundleId.isEmpty && ["spacer", "small-spacer", "flex-spacer"].contains(item.label) {
+        } else if isRealSpacerRow {
             // Real dockutil 3.1.3 represents an added spacer with a literal
             // "spacer"-family label and a synthetic <home>/spacer url, not
             // the fully-empty row isSpacerRow (and ticket 001's research)

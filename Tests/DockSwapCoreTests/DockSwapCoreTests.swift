@@ -71,6 +71,94 @@ final class PresetTests: XCTestCase {
         let preset = captureLiveDock(from: output, name: "test")
         XCTAssertEqual(preset.others, [.spacer])
     }
+
+    /// #10 helpers: a real group backing dir under the real groups root
+    /// (same precedent as the #11 cascade test), with scratch app targets.
+    private func makeGroupFixture(presetName: String, appNames: [String]) throws -> (groupDir: URL, scratchRoot: URL) {
+        let groupDir = GroupStore.groupsRoot()
+            .appendingPathComponent(presetName, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scratchRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let members = try appNames.map { name -> AppIdentity in
+            let target = scratchRoot.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            return AppIdentity(path: target.path)
+        }
+        try GroupStore.materialize(at: groupDir.path, members: members)
+        return (groupDir, scratchRoot)
+    }
+
+    private func listRow(label: String, path: String, section: String = "persistentApps") -> String {
+        let url = URL(fileURLWithPath: path, isDirectory: true).absoluteString
+        return "\(label)\t\(url)\t\(section)\t/plist\t\n"
+    }
+
+    /// Bare POSIX path rows: directories dockutil adds itself are stored
+    /// without a file:// scheme (#10 live evidence) — the production format
+    /// for group backing directories, which are always dockutil-added.
+    private func bareRow(label: String, path: String, section: String = "persistentApps") -> String {
+        "\(label)\t\(path)\t\(section)\t/plist\t\n"
+    }
+
+    /// #10: a folder row under ~/.dockswap/groups/ round-trips with
+    /// members + name instead of degrading to a plain folder.
+    func testCaptureLiveDockRecognizesGroupFolder() throws {
+        let presetName = "recog-test-\(UUID().uuidString.prefix(8))"
+        let (groupDir, scratchRoot) = try makeGroupFixture(presetName: presetName, appNames: ["AppA.app", "AppB.app"])
+        defer {
+            try? FileManager.default.removeItem(at: groupDir.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: scratchRoot)
+        }
+
+        let preset = captureLiveDock(from: bareRow(label: "Design Tools", path: groupDir.path), name: "test")
+
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertEqual(folder.path, groupDir.path)
+        XCTAssertEqual(folder.name, "Design Tools")
+        XCTAssertEqual(
+            Set((folder.members ?? []).compactMap { ($0.path as NSString?)?.lastPathComponent }),
+            ["AppA.app", "AppB.app"])
+    }
+
+    /// #10: a folder row NOT under the groups root still captures as a
+    /// plain folder — no regression to the browse-to-directory path.
+    /// A group path whose directory is gone (e.g. deleted by #11's cascade
+    /// while the Dock still shows the tile) also degrades to plain, not nil.
+    func testCaptureLiveDockLeavesPlainFolderAlone() {
+        let preset = captureLiveDock(from: listRow(label: "Documents", path: "/Users/x/Documents"), name: "test")
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertNil(folder.name)
+        XCTAssertNil(folder.members)
+
+        let ghost = GroupStore.groupsRoot()
+            .appendingPathComponent("no-such-preset", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true).path
+        XCTAssertNil(GroupStore.recognizeGroup(at: ghost, label: "Ghost")?.payload)
+    }
+
+    /// #10: a dangling alias (app deleted since grouping) is skipped with
+    /// a warning; the resolvable member still captures.
+    func testCaptureLiveDockSkipsStaleGroupMemberWithWarning() throws {
+        let presetName = "stale-test-\(UUID().uuidString.prefix(8))"
+        let (groupDir, scratchRoot) = try makeGroupFixture(presetName: presetName, appNames: ["Good.app", "Gone.app"])
+        defer {
+            try? FileManager.default.removeItem(at: groupDir.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: scratchRoot)
+        }
+        try FileManager.default.removeItem(at: scratchRoot.appendingPathComponent("Gone.app"))
+
+        guard let (payload, warnings) = GroupStore.recognizeGroup(at: groupDir.path, label: "Stale Group") else {
+            return XCTFail("expected group recognition")
+        }
+        XCTAssertEqual(payload.members?.count, 1)
+        XCTAssertEqual((payload.members?.first?.path as NSString?)?.lastPathComponent, "Good.app")
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertTrue(warnings[0].contains("Gone.app"))
+
+        let preset = captureLiveDock(from: bareRow(label: "Stale Group", path: groupDir.path), name: "test")
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertEqual(folder.members?.count, 1)
+    }
 }
 
 final class GroupSchemaTests: XCTestCase {

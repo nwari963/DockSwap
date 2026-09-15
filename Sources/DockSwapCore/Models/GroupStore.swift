@@ -56,6 +56,42 @@ public enum GroupStore {
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
     }
 
+    /// True when `path` falls under `~/.dockswap/groups/` — i.e. a
+    /// DockSwap-managed group backing directory, not a plain folder.
+    public static func isGroupPath(_ path: String) -> Bool {
+        let root = groupsRoot().standardizedFileURL.path
+        let standardized = (path as NSString).standardizingPath
+        return standardized.hasPrefix(root + "/")
+    }
+
+    /// Reconstructs a group folder payload from its backing directory:
+    /// resolves each alias file to an `AppIdentity` (same shape as
+    /// `AddItemSheet.browseForApp()`), takes the display name from the
+    /// live-Dock row's label. Returns nil for non-group paths or a missing
+    /// directory (caller keeps the plain-folder behavior). A dangling alias
+    /// (app moved/deleted) is skipped with a warning — never a failure.
+    /// Warnings are returned, not printed: the CLI prints them to stderr.
+    public static func recognizeGroup(at path: String, label: String) -> (payload: FolderItemPayload, warnings: [String])? {
+        guard isGroupPath(path) else { return nil }
+        let dir = URL(fileURLWithPath: path)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        var members: [AppIdentity] = []
+        var warnings: [String] = []
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard !file.lastPathComponent.hasPrefix(".") else { continue } // Finder dotfiles aren't members
+            do {
+                let resolved = try URL(resolvingAliasFileAt: file, options: [])
+                let bundle = Bundle(url: resolved)
+                members.append(AppIdentity(bundleId: bundle?.bundleIdentifier, path: resolved.path))
+            } catch {
+                warnings.append("warning: skipping stale group member '\(file.lastPathComponent)' in '\(path)' (cannot resolve alias)")
+            }
+        }
+        return (FolderItemPayload(path: path, name: label.isEmpty ? nil : label, members: members), warnings)
+    }
+
     static func aliasFileName(for identity: AppIdentity) -> String {
         if let path = identity.path { return (path as NSString).lastPathComponent }
         return (identity.bundleId ?? "app") + ".app"
