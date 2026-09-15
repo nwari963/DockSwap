@@ -391,4 +391,31 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertEqual(preset.dockutilVersion, "3.1.3")
         XCTAssertEqual(preset.macOSVersion, ProcessInfo.processInfo.operatingSystemVersionString)
     }
+
+    /// #11: deleting a preset cascades to its group backing directories;
+    /// a preset with no groups directory deletes exactly as before.
+    func testDeleteCascadesToGroupDirectories() throws {
+        let name = "cascade-test-\(UUID().uuidString.prefix(8))"
+        let preset = DockPreset(name: name, createdAt: "", updatedAt: "")
+        try preset.save(to: name)
+
+        // No groups directory yet: delete succeeds (existing behavior).
+        try DockPreset.delete(named: name)
+        XCTAssertThrowsError(try DockPreset.load(named: name))
+
+        // With a groups directory: cascade removes it.
+        try preset.save(to: name)
+        let groupDir = GroupStore.groupsRoot().appendingPathComponent(name, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: groupDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: groupDir) }
+
+        try DockPreset.delete(named: name)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: groupDir.path),
+                       "delete must cascade to the preset's groups directory")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: groupDir.deletingLastPathComponent().path),
+            "the preset-scoped parent directory itself should be gone too")
+    }
 }

@@ -100,6 +100,10 @@ extension DockPreset {
         } catch {
             throw DockSwapError.io("cannot delete \(url.path): \(error.localizedDescription)")
         }
+        // #11 cascade: also remove this preset's group backing directories.
+        // `try?` — a preset with no groups (the common case) is a clean no-op.
+        try? FileManager.default.removeItem(
+            at: GroupStore.groupsRoot().appendingPathComponent(name, isDirectory: true))
     }
 }
 
