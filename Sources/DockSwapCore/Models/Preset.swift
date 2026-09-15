@@ -101,7 +101,8 @@ public enum DockItem: Codable, Equatable {
 }
 
 /// Identity for app items.
-public struct AppIdentity: Codable, Equatable {
+public struct AppIdentity: Codable, Equatable, Identifiable {
+    public var id: String { bundleId ?? path ?? "" }
     public var bundleId: String?
     public var path: String?
 
