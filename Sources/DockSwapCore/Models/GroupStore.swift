@@ -56,6 +56,14 @@ public enum GroupStore {
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
     }
 
+    /// Removes a single member from the group's backing directory by
+    /// deleting its alias file. Idempotent: safe if the alias is already gone.
+    public static func removeMember(at groupPath: String, member: AppIdentity) {
+        let fileName = aliasFileName(for: member)
+        let aliasURL = URL(fileURLWithPath: groupPath).appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: aliasURL)
+    }
+
     /// True when `path` falls under `~/.dockswap/groups/` — i.e. a
     /// DockSwap-managed group backing directory, not a plain folder.
     public static func isGroupPath(_ path: String) -> Bool {

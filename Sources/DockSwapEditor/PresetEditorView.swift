@@ -23,6 +23,30 @@ struct PresetEditorView: View {
     @State private var expandedGroups: Set<UUID> = []
     @State private var groupDraft: GroupDraft?
     @State private var pendingMergeTarget: UUID?
+    @State private var installedApps: [InstalledApp] = []
+
+    /// Paths/bundleIds currently on the dock in this preset (incl. group members).
+    private var dockPaths: Set<String> {
+        Set(appsItems.compactMap { itemPath($0.item) } + othersItems.compactMap { itemPath($0.item) })
+    }
+    private var dockBundleIds: Set<String> {
+        Set(appsItems.compactMap { itemBundleId($0.item) } + othersItems.compactMap { itemBundleId($0.item) })
+    }
+
+    private func itemPath(_ item: DockItem) -> String? {
+        switch item {
+        case .app(let a): return a.identity.path
+        case .folder(let f): return f.members?.count == nil ? f.path : nil
+        default: return nil
+        }
+    }
+    private func itemBundleId(_ item: DockItem) -> String? {
+        switch item {
+        case .app(let a): return a.identity.bundleId
+        case .folder(let f): return nil
+        default: return nil
+        }
+    }
 
     @StateObject private var drag = RowDragState()
 
@@ -36,7 +60,17 @@ struct PresetEditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        HSplitView {
+            AppLibraryPane(
+                apps: installedApps,
+                onDockPaths: dockPaths,
+                onDockBundleIds: dockBundleIds,
+                onAdd: { app in
+                    appsItems.append(EditableItem(item: .app(AppItemPayload(
+                        identity: AppIdentity(bundleId: app.bundleId, path: app.path)))))
+                }
+            )
+            VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(preset.name).font(.title2).bold()
                 Spacer()
@@ -97,8 +131,10 @@ struct PresetEditorView: View {
                     }
                 }
             }
+            }
         }
-        .frame(minWidth: 460, minHeight: 520)
+        .frame(minWidth: 720, minHeight: 520)
+        .onAppear { installedApps = InstalledApps.scan() }
         .sheet(item: $showingAddSheet) { target in
             AddItemSheet { item in
                 switch target {
@@ -121,28 +157,43 @@ struct PresetEditorView: View {
     private func rowView(for binding: Binding<EditableItem>) -> some View {
         let id = binding.wrappedValue.id
         VStack(alignment: .leading, spacing: 0) {
-            ItemRowView(
+            HStack(spacing: 0) {
+                ItemRowView(
                 item: binding.item,
                 onRenameGroup: { newName in renameGroup(id, to: newName) },
                 onUngroupGroup: { ungroupGroup(id) },
+                onRemoveMember: { member in removeMember(member, from: id) },
                 expanded: expandedGroups.contains(id)
-            )
+                )
+                RemoveArrowRow { remove(id) }
+            }
 
             if case .folder(let folder) = binding.wrappedValue.item,
                let members = folder.members,
                expandedGroups.contains(id) {
                 ForEach(members) { member in
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                        if let path = member.path {
-                            Text((path as NSString).lastPathComponent).font(.caption)
-                        } else {
-                            Text(member.bundleId ?? "app").font(.caption)
-                        }
-                    }
-                    .padding(.leading, 24)
+                    memberRow(member, groupID: id)
                 }
+            }
+        }
+    }
+
+    /// #13: expanded member row with remove-from-group context menu.
+    @ViewBuilder
+    private func memberRow(_ member: AppIdentity, groupID: UUID) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.caption2).foregroundStyle(.tertiary)
+            if let path = member.path {
+                Text((path as NSString).lastPathComponent).font(.caption)
+            } else {
+                Text(member.bundleId ?? "app").font(.caption)
+            }
+        }
+        .padding(.leading, 24)
+        .contextMenu {
+            Button("Remove from Group", role: .destructive) {
+                removeMember(member, from: groupID)
             }
         }
     }
@@ -241,6 +292,27 @@ struct PresetEditorView: View {
         othersItems.removeAll { $0.id == id }
     }
 
+    /// #13: remove a single member from a group row — updates `members` in the
+    /// preset state and deletes the alias from the backing directory.
+    private func removeMember(_ member: AppIdentity, from groupID: UUID) {
+        func strip(_ items: inout [EditableItem]) -> Bool {
+            guard let idx = items.firstIndex(where: { $0.id == groupID }),
+                  case .folder(var f) = items[idx].item,
+                  let members = f.members else { return false }
+            f.members = members.filter { $0 != member }
+            if f.members?.isEmpty == true {
+                // Last member gone: dissolve the backing dir and drop the row.
+                GroupStore.dissolve(path: f.path)
+                items.remove(at: idx)
+            } else {
+                GroupStore.removeMember(at: f.path, member: member)
+                items[idx].item = .folder(f)
+            }
+            return true
+        }
+        _ = strip(&appsItems) || strip(&othersItems)
+    }
+
     // MARK: - Preset lifecycle
 
     private func currentPreset() -> DockPreset {
@@ -285,6 +357,31 @@ struct PresetEditorView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Hover remove arrow (right pane rows)
+
+struct RemoveArrowRow: View {
+    let onRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Group {
+            if hovering {
+                Button {
+                    onRemove()
+                } label: {
+                    Image(systemName: "arrow.left.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .help("Remove from Dock")
+            } else {
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+        .onHover { hovering = $0 }
     }
 }
 

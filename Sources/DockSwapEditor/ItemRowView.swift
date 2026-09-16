@@ -5,6 +5,7 @@ struct ItemRowView: View {
     @Binding var item: DockItem
     var onRenameGroup: ((String) -> Void)? = nil
     var onUngroupGroup: (() -> Void)? = nil
+    var onRemoveMember: ((AppIdentity) -> Void)? = nil
     var expanded: Bool = false
 
     @State private var isEditingName = false
@@ -27,7 +28,7 @@ struct ItemRowView: View {
         case .folder(let folder):
             // A DockSwap-managed group (members present) vs. a plain folder.
             if let members = folder.members {
-                groupRow(name: folder.name, memberCount: members.count)
+                groupRow(name: folder.name, memberCount: members.count, path: folder.path, members: members)
             } else {
                 plainFolderRow(path: folder.path)
             }
@@ -54,7 +55,7 @@ struct ItemRowView: View {
     // MARK: - Group row
 
     @ViewBuilder
-    private func groupRow(name: String?, memberCount: Int) -> some View {
+    private func groupRow(name: String?, memberCount: Int, path: String, members: [AppIdentity]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "folder.fill")
@@ -87,8 +88,19 @@ struct ItemRowView: View {
                     .help("Dissolve group")
                 }
             }
+            // Context menu on the group row header
+            .contextMenu {
+                Button("Rename Group") {
+                    isEditingName = true
+                }
+                Divider()
+                Button("Dissolve Group", role: .destructive) {
+                    onUngroupGroup?()
+                }
+            }
+
             if expanded {
-                // Member rows are rendered inline by the parent.
+                // Member rows rendered inline by the parent.
             }
         }
     }
@@ -115,6 +127,28 @@ struct ItemRowView: View {
                     Text("Date Created").tag("datecreated"); Text("Kind").tag("kind")
                 }
                 .pickerStyle(.menu).font(.caption).labelsHidden()
+            }
+        }
+    }
+
+    // MARK: - Member row (rendered inline when expanded)
+
+    @ViewBuilder
+    func memberRow(_ member: AppIdentity) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.caption2).foregroundStyle(.tertiary)
+            if let path = member.path {
+                Text((path as NSString).lastPathComponent).font(.caption)
+            } else {
+                Text(member.bundleId ?? "app").font(.caption)
+            }
+            Spacer()
+        }
+        .padding(.leading, 24)
+        .contextMenu {
+            Button("Remove from Group", role: .destructive) {
+                onRemoveMember?(member)
             }
         }
     }
