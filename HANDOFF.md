@@ -4,11 +4,12 @@
 
 ## Now
 - **Goal:** Visual app grouping in DockSwapEditor — spec nwari963/DockSwap#8.
-- **Current task:** none in flight. #9–#12 landed. **#13 is OPEN and unimplemented** (manage existing group: member-remove, context menus).
+- **Current task:** none in flight. **#9–#13 all landed.** Spec #8's tickets are done; editor now has split-pane layout (app library ↔ dock layout) with hover arrows both ways.
+- **Last commit:** ad3f15c (split-pane + #13 member removal).
 - **Status:** ready for next step.
 
 ## Next step
-#13 (manage existing group) — extend `ItemRowView`/`PresetEditorView` with member-remove + context menus. #12 already added group-row rename + dissolve, so #13 is mostly member removal + context-menu actions.
+Spec #8 complete (#9–#13). Options: close #8, live-QA the editor UI (split pane, arrows, grouping — needs a human hand), or move to the BUILD-PLAYBOOK post-MVP backlog (menu-bar app scaffold exists, hotkeys, homebrew, `--no-restart`/`--preview` flags).
 
 ## State
 - **Done:** #9 (commit 3f28014) — schema `name`/`members`, `GroupStore.materialize`/`dissolve`, apply wiring, live-verified. #11 (commit 376c88d) — delete cascade + test, live-verified. #10 (commit 768cf93) — `GroupStore.recognizeGroup` seam, capture round-trip, bare-path folder rows, live-verified switch→save. #12 (commit 214194a) — hover-to-combine drag gesture, group-row render/rename/dissolve, `RowDragState`, `AppIdentity: Identifiable`; build clean, 26/26 tests, app launches.
