@@ -71,6 +71,195 @@ final class PresetTests: XCTestCase {
         let preset = captureLiveDock(from: output, name: "test")
         XCTAssertEqual(preset.others, [.spacer])
     }
+
+    /// #10 helpers: a real group backing dir under the real groups root
+    /// (same precedent as the #11 cascade test), with scratch app targets.
+    private func makeGroupFixture(presetName: String, appNames: [String]) throws -> (groupDir: URL, scratchRoot: URL) {
+        let groupDir = GroupStore.groupsRoot()
+            .appendingPathComponent(presetName, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scratchRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let members = try appNames.map { name -> AppIdentity in
+            let target = scratchRoot.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            return AppIdentity(path: target.path)
+        }
+        try GroupStore.materialize(at: groupDir.path, members: members)
+        return (groupDir, scratchRoot)
+    }
+
+    private func listRow(label: String, path: String, section: String = "persistentApps") -> String {
+        let url = URL(fileURLWithPath: path, isDirectory: true).absoluteString
+        return "\(label)\t\(url)\t\(section)\t/plist\t\n"
+    }
+
+    /// Bare POSIX path rows: directories dockutil adds itself are stored
+    /// without a file:// scheme (#10 live evidence) — the production format
+    /// for group backing directories, which are always dockutil-added.
+    private func bareRow(label: String, path: String, section: String = "persistentApps") -> String {
+        "\(label)\t\(path)\t\(section)\t/plist\t\n"
+    }
+
+    /// #10: a folder row under ~/.dockswap/groups/ round-trips with
+    /// members + name instead of degrading to a plain folder.
+    func testCaptureLiveDockRecognizesGroupFolder() throws {
+        let presetName = "recog-test-\(UUID().uuidString.prefix(8))"
+        let (groupDir, scratchRoot) = try makeGroupFixture(presetName: presetName, appNames: ["AppA.app", "AppB.app"])
+        defer {
+            try? FileManager.default.removeItem(at: groupDir.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: scratchRoot)
+        }
+
+        let preset = captureLiveDock(from: bareRow(label: "Design Tools", path: groupDir.path), name: "test")
+
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertEqual(folder.path, groupDir.path)
+        XCTAssertEqual(folder.name, "Design Tools")
+        XCTAssertEqual(
+            Set((folder.members ?? []).compactMap { ($0.path as NSString?)?.lastPathComponent }),
+            ["AppA.app", "AppB.app"])
+    }
+
+    /// #10: a folder row NOT under the groups root still captures as a
+    /// plain folder — no regression to the browse-to-directory path.
+    /// A group path whose directory is gone (e.g. deleted by #11's cascade
+    /// while the Dock still shows the tile) also degrades to plain, not nil.
+    func testCaptureLiveDockLeavesPlainFolderAlone() {
+        let preset = captureLiveDock(from: listRow(label: "Documents", path: "/Users/x/Documents"), name: "test")
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertNil(folder.name)
+        XCTAssertNil(folder.members)
+
+        let ghost = GroupStore.groupsRoot()
+            .appendingPathComponent("no-such-preset", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true).path
+        XCTAssertNil(GroupStore.recognizeGroup(at: ghost, label: "Ghost")?.payload)
+    }
+
+    /// #10: a dangling alias (app deleted since grouping) is skipped with
+    /// a warning; the resolvable member still captures.
+    func testCaptureLiveDockSkipsStaleGroupMemberWithWarning() throws {
+        let presetName = "stale-test-\(UUID().uuidString.prefix(8))"
+        let (groupDir, scratchRoot) = try makeGroupFixture(presetName: presetName, appNames: ["Good.app", "Gone.app"])
+        defer {
+            try? FileManager.default.removeItem(at: groupDir.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: scratchRoot)
+        }
+        try FileManager.default.removeItem(at: scratchRoot.appendingPathComponent("Gone.app"))
+
+        guard let (payload, warnings) = GroupStore.recognizeGroup(at: groupDir.path, label: "Stale Group") else {
+            return XCTFail("expected group recognition")
+        }
+        XCTAssertEqual(payload.members?.count, 1)
+        XCTAssertEqual((payload.members?.first?.path as NSString?)?.lastPathComponent, "Good.app")
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertTrue(warnings[0].contains("Gone.app"))
+
+        let preset = captureLiveDock(from: bareRow(label: "Stale Group", path: groupDir.path), name: "test")
+        guard case .folder(let folder) = preset.apps.first else { return XCTFail("expected folder") }
+        XCTAssertEqual(folder.members?.count, 1)
+    }
+}
+
+final class GroupSchemaTests: XCTestCase {
+    func testFolderItemGroupCodableRoundtrip() throws {
+        let folder = DockItem.folder(FolderItemPayload(
+            path: "/Users/x/.dockswap/groups/work/abc-123",
+            name: "Design Tools",
+            members: [AppIdentity(bundleId: "com.example.app", path: "/Applications/Example.app")]
+        ))
+        let preset = DockPreset(
+            name: "work", createdAt: "2026-09-14T00:00:00Z", updatedAt: "2026-09-14T00:00:00Z", apps: [folder])
+
+        let data = try JSONEncoder().encode(preset)
+        let decoded = try JSONDecoder().decode(DockPreset.self, from: data)
+        XCTAssertEqual(preset, decoded)
+
+        let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let apps = object["apps"] as! [[String: Any]]
+        XCTAssertEqual(apps[0]["name"] as? String, "Design Tools")
+        XCTAssertNotNil(apps[0]["members"])
+    }
+
+    /// A plain, non-group folder (the pre-existing browse-to-directory flow)
+    /// must not gain `name`/`members` keys it never asked for.
+    func testFolderItemPlainHasNoNameOrMembersKeys() throws {
+        let folder = DockItem.folder(FolderItemPayload(path: "/Users/x/Documents"))
+        let preset = DockPreset(
+            name: "work", createdAt: "2026-09-14T00:00:00Z", updatedAt: "2026-09-14T00:00:00Z", apps: [folder])
+        let data = try JSONEncoder().encode(preset)
+        let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let apps = object["apps"] as! [[String: Any]]
+        XCTAssertNil(apps[0]["name"])
+        XCTAssertNil(apps[0]["members"])
+    }
+
+    /// Lenient-reader contract: a preset file written before this schema change
+    /// (no `name`/`members` keys at all) must still decode successfully.
+    func testOldFormatFolderJSONStillDecodes() throws {
+        let json = """
+        {"name":"work","schemaVersion":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",\
+        "apps":[{"type":"folder","path":"/Users/x/Documents"}],"others":[]}
+        """
+        let preset = try JSONDecoder().decode(DockPreset.self, from: json.data(using: .utf8)!)
+        guard case .folder(let folder) = preset.apps[0] else { return XCTFail("expected folder") }
+        XCTAssertNil(folder.name)
+        XCTAssertNil(folder.members)
+    }
+}
+
+final class GroupStoreTests: XCTestCase {
+    private func makeScratchApps(_ names: [String]) throws -> (root: URL, apps: [URL]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        var apps: [URL] = []
+        for name in names {
+            let app = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            apps.append(app)
+        }
+        return (root, apps)
+    }
+
+    func testMaterializeCreatesResolvableAliases() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app", "AppB.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let groupDir = root.appendingPathComponent("group")
+        try GroupStore.materialize(at: groupDir.path, members: apps.map { AppIdentity(path: $0.path) })
+
+        let files = try FileManager.default.contentsOfDirectory(at: groupDir, includingPropertiesForKeys: nil)
+        XCTAssertEqual(Set(files.map(\.lastPathComponent)), Set(apps.map(\.lastPathComponent)))
+
+        let resolvedPaths = try Set(files.map {
+            try URL(resolvingAliasFileAt: $0, options: []).resolvingSymlinksInPath().path
+        })
+        XCTAssertEqual(resolvedPaths, Set(apps.map { $0.resolvingSymlinksInPath().path }))
+    }
+
+    /// Idempotent/convergent: re-materializing with a shrunk member list removes
+    /// the alias for the dropped member rather than leaving it orphaned.
+    func testMaterializeConvergesOnRemovedMember() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app", "AppB.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let groupDir = root.appendingPathComponent("group")
+
+        try GroupStore.materialize(at: groupDir.path, members: apps.map { AppIdentity(path: $0.path) })
+        try GroupStore.materialize(at: groupDir.path, members: [AppIdentity(path: apps[0].path)])
+
+        let files = try FileManager.default.contentsOfDirectory(at: groupDir, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.map(\.lastPathComponent), ["AppA.app"])
+    }
+
+    func testDissolveRemovesBackingDirectory() throws {
+        let (root, apps) = try makeScratchApps(["AppA.app"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let groupDir = root.appendingPathComponent("group")
+        try GroupStore.materialize(at: groupDir.path, members: [AppIdentity(path: apps[0].path)])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: groupDir.path))
+
+        GroupStore.dissolve(path: groupDir.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: groupDir.path))
+    }
 }
 
 final class ErrorTests: XCTestCase {
@@ -223,6 +412,38 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertEqual(mock.applyArgs, ["--add", "/Applications/New.app", "--section", "apps", "--after", "com.example.existing"])
     }
 
+    /// A group folder (one with `members` set) gets the live-Dock-verified
+    /// `--view grid --display folder` configuration by default, plus `--label`
+    /// from its `name` — a plain folder's args are unaffected (no view/display
+    /// flags unless it explicitly sets them, exactly as before this change).
+    func testGroupFolderAddArgsIncludeViewDisplayLabel() throws {
+        let mock = MockDockUtil()
+        let engine = DockDiffEngine(dockUtil: mock)
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let appA = scratch.appendingPathComponent("AppA.app")
+        try FileManager.default.createDirectory(at: appA, withIntermediateDirectories: true)
+        let groupDir = scratch.appendingPathComponent("group").path
+
+        let preset = DockPreset(
+            name: "preset",
+            createdAt: "2026-09-06T00:00:00Z",
+            updatedAt: "2026-09-06T00:00:00Z",
+            apps: [
+                .folder(FolderItemPayload(path: groupDir, name: "Design Tools", members: [AppIdentity(path: appA.path)])),
+            ]
+        )
+
+        _ = try engine.apply(preset)
+
+        XCTAssertEqual(mock.applyArgs, [
+            "--add", groupDir, "--section", "apps",
+            "--view", "grid", "--display", "folder", "--label", "Design Tools",
+            "--position", "beginning",
+        ])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: groupDir), "apply must materialize the backing directory")
+    }
+
     /// 003 rule 1 only matches on bundleId when *both* sides have one; two
     /// different path-only apps must not falsely match via `nil == nil`
     /// (which would make `diff` see no change at all here).
@@ -257,5 +478,32 @@ final class DiffEngineTests: XCTestCase {
 
         XCTAssertEqual(preset.dockutilVersion, "3.1.3")
         XCTAssertEqual(preset.macOSVersion, ProcessInfo.processInfo.operatingSystemVersionString)
+    }
+
+    /// #11: deleting a preset cascades to its group backing directories;
+    /// a preset with no groups directory deletes exactly as before.
+    func testDeleteCascadesToGroupDirectories() throws {
+        let name = "cascade-test-\(UUID().uuidString.prefix(8))"
+        let preset = DockPreset(name: name, createdAt: "", updatedAt: "")
+        try preset.save(to: name)
+
+        // No groups directory yet: delete succeeds (existing behavior).
+        try DockPreset.delete(named: name)
+        XCTAssertThrowsError(try DockPreset.load(named: name))
+
+        // With a groups directory: cascade removes it.
+        try preset.save(to: name)
+        let groupDir = GroupStore.groupsRoot().appendingPathComponent(name, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: groupDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: groupDir) }
+
+        try DockPreset.delete(named: name)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: groupDir.path),
+                       "delete must cascade to the preset's groups directory")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: groupDir.deletingLastPathComponent().path),
+            "the preset-scoped parent directory itself should be gone too")
     }
 }

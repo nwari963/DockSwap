@@ -3,6 +3,13 @@ import DockSwapCore
 
 struct ItemRowView: View {
     @Binding var item: DockItem
+    var onRenameGroup: ((String) -> Void)? = nil
+    var onUngroupGroup: (() -> Void)? = nil
+    var onRemoveMember: ((AppIdentity) -> Void)? = nil
+    var expanded: Bool = false
+
+    @State private var isEditingName = false
+    @State private var draftName = ""
 
     var body: some View {
         switch item {
@@ -15,36 +22,15 @@ struct ItemRowView: View {
                         Text(path).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Spacer()
             }
 
         case .folder(let folder):
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Image(systemName: "folder.fill").foregroundStyle(.secondary)
-                    Text((folder.path as NSString).lastPathComponent)
-                }
-                HStack {
-                    Picker("View", selection: viewBinding()) {
-                        Text("Auto").tag("auto")
-                        Text("Grid").tag("grid")
-                        Text("Fan").tag("fan")
-                        Text("List").tag("list")
-                    }
-                    Picker("Display", selection: displayBinding()) {
-                        Text("Folder").tag("folder")
-                        Text("Stack").tag("stack")
-                    }
-                    Picker("Sort", selection: sortBinding()) {
-                        Text("Name").tag("name")
-                        Text("Date Added").tag("dateadded")
-                        Text("Date Modified").tag("datemodified")
-                        Text("Date Created").tag("datecreated")
-                        Text("Kind").tag("kind")
-                    }
-                }
-                .pickerStyle(.menu)
-                .font(.caption)
-                .labelsHidden()
+            // A DockSwap-managed group (members present) vs. a plain folder.
+            if let members = folder.members {
+                groupRow(name: folder.name, memberCount: members.count, path: folder.path, members: members)
+            } else {
+                plainFolderRow(path: folder.path)
             }
 
         case .url:
@@ -61,9 +47,123 @@ struct ItemRowView: View {
             HStack {
                 Image(systemName: "square.dashed").foregroundStyle(.secondary)
                 Text("Spacer").foregroundStyle(.secondary)
+                Spacer()
             }
         }
     }
+
+    // MARK: - Group row
+
+    @ViewBuilder
+    private func groupRow(name: String?, memberCount: Int, path: String, members: [AppIdentity]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(.blue)
+                    .font(.title3)
+                if isEditingName {
+                    TextField("Group name", text: $draftName, onCommit: commitNameRename)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name ?? "Group").font(.headline)
+                        Text("\(memberCount) member\(memberCount == 1 ? "" : "s")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        draftName = name ?? ""
+                        isEditingName = true
+                    }
+                }
+                Spacer()
+                if let onUngroupGroup {
+                    Button {
+                        onUngroupGroup()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Dissolve group")
+                }
+            }
+            // Context menu on the group row header
+            .contextMenu {
+                Button("Rename Group") {
+                    isEditingName = true
+                }
+                Divider()
+                Button("Dissolve Group", role: .destructive) {
+                    onUngroupGroup?()
+                }
+            }
+
+            if expanded {
+                // Member rows rendered inline by the parent.
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func plainFolderRow(path: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "folder.fill").foregroundStyle(.secondary)
+                Text((path as NSString).lastPathComponent)
+                Spacer()
+            }
+            HStack {
+                Picker("View", selection: viewBinding()) {
+                    Text("Auto").tag("auto"); Text("Grid").tag("grid")
+                    Text("Fan").tag("fan"); Text("List").tag("list")
+                }
+                Picker("Display", selection: displayBinding()) {
+                    Text("Folder").tag("folder"); Text("Stack").tag("stack")
+                }
+                Picker("Sort", selection: sortBinding()) {
+                    Text("Name").tag("name"); Text("Date Added").tag("dateadded")
+                    Text("Date Modified").tag("datemodified")
+                    Text("Date Created").tag("datecreated"); Text("Kind").tag("kind")
+                }
+                .pickerStyle(.menu).font(.caption).labelsHidden()
+            }
+        }
+    }
+
+    // MARK: - Member row (rendered inline when expanded)
+
+    @ViewBuilder
+    func memberRow(_ member: AppIdentity) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.caption2).foregroundStyle(.tertiary)
+            if let path = member.path {
+                Text((path as NSString).lastPathComponent).font(.caption)
+            } else {
+                Text(member.bundleId ?? "app").font(.caption)
+            }
+            Spacer()
+        }
+        .padding(.leading, 24)
+        .contextMenu {
+            Button("Remove from Group", role: .destructive) {
+                onRemoveMember?(member)
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func commitNameRename() {
+        let trimmed = draftName.trimmingCharacters(in: .whitespaces)
+        isEditingName = false
+        if !trimmed.isEmpty {
+            onRenameGroup?(trimmed)
+        }
+    }
+
+    // MARK: - Display
 
     private func displayName(for app: AppItemPayload) -> String {
         if let path = app.identity.path {
@@ -72,37 +172,31 @@ struct ItemRowView: View {
         return app.identity.bundleId ?? "App"
     }
 
-    // Each binding reads/writes through the parent enum by pattern-matching
-    // on the current value of `item` — DockItem's associated payloads are
-    // value types, so a folder/url edit has to round-trip through the case.
+    // MARK: - Bindings (folder pickers + URL fields)
+
     private func viewBinding() -> Binding<String> {
         Binding(
             get: { if case .folder(let f) = item { return f.view ?? "auto" }; return "auto" },
-            set: { newValue in if case .folder(var f) = item { f.view = newValue; item = .folder(f) } }
-        )
+            set: { if case .folder(var f) = item { f.view = $0; item = .folder(f) } })
     }
     private func displayBinding() -> Binding<String> {
         Binding(
             get: { if case .folder(let f) = item { return f.display ?? "folder" }; return "folder" },
-            set: { newValue in if case .folder(var f) = item { f.display = newValue; item = .folder(f) } }
-        )
+            set: { if case .folder(var f) = item { f.display = $0; item = .folder(f) } })
     }
     private func sortBinding() -> Binding<String> {
         Binding(
             get: { if case .folder(let f) = item { return f.sort ?? "name" }; return "name" },
-            set: { newValue in if case .folder(var f) = item { f.sort = newValue; item = .folder(f) } }
-        )
+            set: { if case .folder(var f) = item { f.sort = $0; item = .folder(f) } })
     }
     private func titleBinding() -> Binding<String> {
         Binding(
             get: { if case .url(let u) = item { return u.title }; return "" },
-            set: { newValue in if case .url(var u) = item { u.title = newValue; item = .url(u) } }
-        )
+            set: { if case .url(var u) = item { u.title = $0; item = .url(u) } })
     }
     private func urlBinding() -> Binding<String> {
         Binding(
             get: { if case .url(let u) = item { return u.url }; return "" },
-            set: { newValue in if case .url(var u) = item { u.url = newValue; item = .url(u) } }
-        )
+            set: { if case .url(var u) = item { u.url = $0; item = .url(u) } })
     }
 }
