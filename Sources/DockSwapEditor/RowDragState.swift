@@ -9,6 +9,8 @@ import DockSwapCore
 final class RowDragState: ObservableObject {
     /// Stable id of the row being dragged.
     var sourceID: UUID?
+    /// Section of the source row ("apps" or "others").
+    var sourceSection: String?
     /// Stable id of the row currently hovered (drop candidate).
     var hoverID: UUID?
     /// Whether the hover-hold has completed on `hoverID` (affordance shown).
@@ -20,8 +22,9 @@ final class RowDragState: ObservableObject {
     private var holdTask: Task<Void, Never>?
     private let holdDuration: Duration = .milliseconds(202)
 
-    func begin(_ id: UUID) {
+    func begin(_ id: UUID, section: String) {
         sourceID = id
+        sourceSection = section
         hoverID = nil
         holdCompleted = false
         holdTask?.cancel()
@@ -43,7 +46,7 @@ final class RowDragState: ObservableObject {
 
     func end() -> (source: UUID, target: UUID)? {
         holdTask?.cancel()
-        defer { sourceID = nil; hoverID = nil; holdCompleted = false }
+        defer { sourceID = nil; hoverID = nil; holdCompleted = false; sourceSection = nil }
         guard let s = sourceID, let t = hoverID, holdCompleted, s != t else { return nil }
         return (s, t)
     }
@@ -53,5 +56,6 @@ final class RowDragState: ObservableObject {
         sourceID = nil
         hoverID = nil
         holdCompleted = false
+        sourceSection = nil
     }
 }

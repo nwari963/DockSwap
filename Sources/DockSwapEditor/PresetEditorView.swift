@@ -24,6 +24,9 @@ struct PresetEditorView: View {
     @State private var groupDraft: GroupDraft?
     @State private var pendingMergeTarget: UUID?
     @State private var installedApps: [InstalledApp] = []
+    @State private var showingDryRun = false
+    @State private var dryRunDiff: (removes: [DiffItem], adds: [DiffItem])?
+    @State private var dryRunApplied = false
 
     /// Paths/bundleIds currently on the dock in this preset (incl. group members).
     private var dockPaths: Set<String> {
@@ -77,6 +80,8 @@ struct PresetEditorView: View {
                 if let statusMessage {
                     Text(statusMessage).foregroundStyle(.secondary)
                 }
+                Button("Preview Changes") { computeDryRun() }
+                    .disabled(isApplying)
                 Button("Apply") { apply() }
                     .disabled(isApplying)
                 Button("Save") { save() }
@@ -89,14 +94,18 @@ struct PresetEditorView: View {
                     ForEach($appsItems) { $editable in
                         rowView(for: $editable)
                             .onDrag {
-                                drag.begin(editable.id)
+                                drag.begin(editable.id, section: "apps")
                                 return NSItemProvider(object: editable.id.uuidString as NSString)
                             }
                             .onDrop(of: [.text], delegate: RowDropDelegate(
                                 targetID: editable.id,
+                                targetSection: "apps",
                                 drag: drag,
                                 onHoldComplete: { sourceID in
                                     startMerge(from: sourceID, onto: editable.id)
+                                },
+                                onDropComplete: { sourceID, sourceSection in
+                                    handleDrop(sourceID: sourceID, sourceSection: sourceSection, targetID: editable.id, targetSection: "apps")
                                 }
                             ))
                     }
@@ -112,14 +121,18 @@ struct PresetEditorView: View {
                     ForEach($othersItems) { $editable in
                         rowView(for: $editable)
                             .onDrag {
-                                drag.begin(editable.id)
+                                drag.begin(editable.id, section: "others")
                                 return NSItemProvider(object: editable.id.uuidString as NSString)
                             }
                             .onDrop(of: [.text], delegate: RowDropDelegate(
                                 targetID: editable.id,
+                                targetSection: "others",
                                 drag: drag,
                                 onHoldComplete: { sourceID in
                                     startMerge(from: sourceID, onto: editable.id)
+                                },
+                                onDropComplete: { sourceID, sourceSection in
+                                    handleDrop(sourceID: sourceID, sourceSection: sourceSection, targetID: editable.id, targetSection: "others")
                                 }
                             ))
                     }
@@ -135,6 +148,7 @@ struct PresetEditorView: View {
         }
         .frame(minWidth: 720, minHeight: 520)
         .onAppear { installedApps = InstalledApps.scan() }
+        .onReceive(NotificationCenter.default.publisher(for: .applyFromDryRun)) { _ in apply() }
         .sheet(item: $showingAddSheet) { target in
             AddItemSheet { item in
                 switch target {
@@ -147,6 +161,13 @@ struct PresetEditorView: View {
             GroupNameSheet { name in
                 commitMerge(named: name)
             }
+        }
+        .sheet(isPresented: $showingDryRun) {
+            DryRunView(
+                applied: dryRunApplied,
+                removes: dryRunDiff?.removes ?? [],
+                adds: dryRunDiff?.adds ?? []
+            )
         }
         .alert("Error", isPresented: .constant(errorMessage != nil), actions: {
             Button("OK") { errorMessage = nil }
@@ -313,6 +334,64 @@ struct PresetEditorView: View {
         _ = strip(&appsItems) || strip(&othersItems)
     }
 
+    // MARK: - Cross-section drag-drop
+
+    private func handleDrop(sourceID: UUID, sourceSection: String, targetID: UUID, targetSection: String) {
+        // Find source item and remove from its section
+        var sourceItem: DockItem?
+        if sourceSection == "apps" {
+            if let idx = appsItems.firstIndex(where: { $0.id == sourceID }) {
+                sourceItem = appsItems[idx].item
+                appsItems.remove(at: idx)
+            }
+        } else {
+            if let idx = othersItems.firstIndex(where: { $0.id == sourceID }) {
+                sourceItem = othersItems[idx].item
+                othersItems.remove(at: idx)
+            }
+        }
+
+        guard let item = sourceItem else { return }
+
+        // Check if target is a group (folder with members) — drop-inside-group
+        func addToGroup(_ items: inout [EditableItem]) -> Bool {
+            guard let idx = items.firstIndex(where: { $0.id == targetID }),
+                  case .folder(var f) = items[idx].item,
+                  f.members != nil else { return false }
+            // Add app to group members
+            if case .app(let app) = item {
+                f.members?.append(app.identity)
+            } else if case .folder(let folder) = item {
+                // If dropping a group onto a group, merge members
+                f.members?.append(contentsOf: folder.members ?? [])
+            }
+            items[idx].item = .folder(f)
+            return true
+        }
+
+        // Try adding to group in target section first
+        if targetSection == "apps" {
+            if addToGroup(&appsItems) { return }
+        } else {
+            if addToGroup(&othersItems) { return }
+        }
+
+        // Otherwise insert at section level (existing cross-section behavior)
+        if targetSection == "apps" {
+            if let idx = appsItems.firstIndex(where: { $0.id == targetID }) {
+                appsItems.insert(EditableItem(item: item), at: idx)
+            } else {
+                appsItems.append(EditableItem(item: item))
+            }
+        } else {
+            if let idx = othersItems.firstIndex(where: { $0.id == targetID }) {
+                othersItems.insert(EditableItem(item: item), at: idx)
+            } else {
+                othersItems.append(EditableItem(item: item))
+            }
+        }
+    }
+
     // MARK: - Preset lifecycle
 
     private func currentPreset() -> DockPreset {
@@ -358,6 +437,27 @@ struct PresetEditorView: View {
             }
         }
     }
+
+    private func computeDryRun() {
+        let target = currentPreset()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let engine = DockDiffEngine(dockUtil: try DockUtil.resolved())
+                let current = try engine.captureCurrentPreset()
+                let (removes, adds) = diff(target, from: current)
+                let applied = isApplied(target, to: current)
+                DispatchQueue.main.async {
+                    dryRunDiff = (removes, adds)
+                    dryRunApplied = applied
+                    showingDryRun = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    errorMessage = "\(error)"
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Hover remove arrow (right pane rows)
@@ -389,8 +489,10 @@ struct RemoveArrowRow: View {
 
 private struct RowDropDelegate: DropDelegate {
     let targetID: UUID
+    let targetSection: String
     @ObservedObject var drag: RowDragState
     let onHoldComplete: (UUID) -> Void
+    let onDropComplete: (UUID, String) -> Void
 
     func dropEntered(info: DropInfo) {
         drag.hover(targetID)
@@ -415,7 +517,10 @@ private struct RowDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        true
+        if let source = drag.sourceID, let sourceSection = drag.sourceSection {
+            onDropComplete(source, sourceSection)
+        }
+        return true
     }
 }
 
@@ -449,4 +554,95 @@ struct GroupNameSheet: View {
         onCommit(trimmed)
         dismiss()
     }
+}
+
+// MARK: - Dry-run preview
+
+struct DryRunView: View {
+    @Environment(\.dismiss) private var dismiss
+    let applied: Bool
+    let removes: [DiffItem]
+    let adds: [DiffItem]
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Preview Changes").font(.title2).bold()
+
+            if applied {
+                Text("This preset is already applied to the Dock.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            } else if removes.isEmpty && adds.isEmpty {
+                Text("No changes detected.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if !removes.isEmpty {
+                            Text("Will remove (\(removes.count))").font(.headline).foregroundStyle(.red)
+                            ForEach(removes, id: \.item.description) { item in
+                                HStack {
+                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                                    icon(for: item.item)
+                                    Text(item.item.description)
+                                    Spacer()
+                                    Text(item.section.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if !adds.isEmpty {
+                            Text("Will add (\(adds.count))").font(.headline).foregroundStyle(.green)
+                            ForEach(adds, id: \.item.description) { item in
+                                HStack {
+                                    Image(systemName: "plus.circle.fill").foregroundStyle(.green)
+                                    icon(for: item.item)
+                                    Text(item.item.description)
+                                    Spacer()
+                                    Text(item.section.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 300)
+            }
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                if !applied && (!removes.isEmpty || !adds.isEmpty) {
+                    Button("Apply Changes") {
+                        dismiss()
+                        NotificationCenter.default.post(name: .applyFromDryRun, object: nil)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 480)
+    }
+
+    @ViewBuilder
+    private func icon(for item: DockItem) -> some View {
+        switch item {
+        case .app(let app):
+            Image(systemName: "app.fill").foregroundStyle(.secondary)
+        case .folder(let folder):
+            Image(systemName: folder.members != nil ? "folder.fill" : "folder")
+                .foregroundStyle(folder.members != nil ? .blue : .secondary)
+        case .url:
+            Image(systemName: "link").foregroundStyle(.secondary)
+        case .spacer:
+            Image(systemName: "square.dashed").foregroundStyle(.secondary)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let applyFromDryRun = Notification.Name("applyFromDryRun")
 }
