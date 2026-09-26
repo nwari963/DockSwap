@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -29,11 +29,17 @@ let package = Package(
         ),
         .executableTarget(
             name: "DockSwapMenuBar",
-            dependencies: ["DockSwapCore"]
+            dependencies: ["DockSwapCore"],
+            resources: [
+                .copy("dockswap-icon.icns"),
+            ]
         ),
         .executableTarget(
             name: "DockSwapEditor",
-            dependencies: ["DockSwapCore"]
+            dependencies: ["DockSwapCore"],
+            resources: [
+                .copy("dockswap-icon.icns"),
+            ]
         ),
         .testTarget(
             name: "DockSwapCoreTests",

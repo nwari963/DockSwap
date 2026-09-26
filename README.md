@@ -1,5 +1,7 @@
 # DockSwap
 
+![DockSwap](dockswap-logo-256.png)
+
 A lightweight, open-source CLI for saving and switching macOS Dock presets.
 
 ## Installation

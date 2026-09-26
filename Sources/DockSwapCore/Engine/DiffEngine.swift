@@ -2,7 +2,7 @@ import Foundation
 
 /// The two sides of the Dock's persistent items, per ticket 001. Raw values
 /// match dockutil's `--section` argument.
-public enum DockSection: String {
+public enum DockSection: String, Sendable {
     case apps
     case others
 }
@@ -144,7 +144,7 @@ public func isApplied(_ preset: DockPreset, to current: DockPreset) -> Bool {
     return removes.isEmpty && adds.isEmpty
 }
 
-public struct DiffItem {
+public struct DiffItem: Sendable {
     public let item: DockItem
     public let section: DockSection
 
