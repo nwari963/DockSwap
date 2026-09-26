@@ -6,7 +6,7 @@ import Foundation
 public let currentSchemaVersion = 1
 
 /// A single dock preset.
-public struct DockPreset: Codable, Equatable {
+public struct DockPreset: Codable, Equatable, Sendable {
     public var name: String
     public var schemaVersion: Int
     public var createdAt: String
@@ -38,7 +38,7 @@ public struct DockPreset: Codable, Equatable {
 }
 
 /// A dock item discriminated by `type`.
-public enum DockItem: Codable, Equatable {
+public enum DockItem: Codable, Equatable, Sendable {
     /// JSON representation matches ticket 001 (discriminated objects).
     case app(AppItemPayload)
     case folder(FolderItemPayload)
@@ -101,7 +101,7 @@ public enum DockItem: Codable, Equatable {
 }
 
 /// Identity for app items.
-public struct AppIdentity: Codable, Equatable, Identifiable {
+public struct AppIdentity: Codable, Equatable, Identifiable, Sendable {
     public var id: String { bundleId ?? path ?? "" }
     public var bundleId: String?
     public var path: String?
@@ -114,12 +114,12 @@ public struct AppIdentity: Codable, Equatable, Identifiable {
 
 // MARK: - Codable item payloads (JSON mirrors ticket 001)
 
-public struct AppItemPayload: Codable, Equatable {
+public struct AppItemPayload: Codable, Equatable, Sendable {
     public var identity: AppIdentity
     public init(identity: AppIdentity) { self.identity = identity }
 }
 
-public struct FolderItemPayload: Codable, Equatable {
+public struct FolderItemPayload: Codable, Equatable, Sendable {
     public var path: String
     public var view: String?
     public var display: String?
@@ -142,7 +142,7 @@ public struct FolderItemPayload: Codable, Equatable {
     }
 }
 
-public struct URLItemPayload: Codable, Equatable {
+public struct URLItemPayload: Codable, Equatable, Sendable {
     public var title: String
     public var url: String
 
